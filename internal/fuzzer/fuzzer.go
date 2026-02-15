@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 type FuzzMode string
@@ -17,14 +20,14 @@ const (
 )
 
 type FuzzerConfig struct {
-	Target       string
-	Mode         FuzzMode
-	Wordlist     string
-	Threads      int
-	Timeout      int
-	MatchCodes   []int
-	FilterCodes  []int
-	FilterSize   int
+	Target         string
+	Mode           FuzzMode
+	Wordlist       string
+	Threads        int
+	Timeout        int
+	MatchCodes     []int
+	FilterCodes    []int
+	FilterSize     int
 	FollowRedirect bool
 }
 
@@ -47,7 +50,11 @@ type Fuzzer struct {
 }
 
 func NewFuzzer(config FuzzerConfig) *Fuzzer {
-	// Default values
+	// Ensure target has scheme for directory mode
+	if config.Mode == ModeDirectory && !strings.HasPrefix(config.Target, "http") {
+		config.Target = "https://" + config.Target
+	}
+
 	if config.Threads == 0 {
 		config.Threads = 40
 	}
@@ -75,55 +82,61 @@ func NewFuzzer(config FuzzerConfig) *Fuzzer {
 func (f *Fuzzer) Start(ctx context.Context) ([]FuzzResult, error) {
 	startTime := time.Now()
 
-	// Load wordlist
 	words, err := LoadWordlist(f.config.Wordlist)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load wordlist: %w", err)
 	}
 	f.total = len(words)
 
-	fmt.Printf("\n🎯 Starting %s fuzzing\n", f.config.Mode)
-	fmt.Printf("   Target: %s\n", f.config.Target)
-	fmt.Printf("   Wordlist: %d words\n", f.total)
-	fmt.Printf("   Threads: %d\n", f.config.Threads)
+	// FFUF-style banner
+	fmt.Println(color.BlueString("════════════════════════════════════════════════════════════"))
+	fmt.Printf(" :: Method           : %s\n", color.CyanString("GET"))
+	fmt.Printf(" :: URL              : %s\n", color.CyanString(f.config.Target))
+	fmt.Printf(" :: Wordlist         : %s (%d words)\n", color.CyanString(f.config.Wordlist), f.total)
+	fmt.Printf(" :: Threads          : %d\n", f.config.Threads)
+	fmt.Printf(" :: Match Codes      : %v\n", f.config.MatchCodes)
+	fmt.Println(color.BlueString("════════════════════════════════════════════════════════════"))
 	fmt.Println()
 
-	// Create worker pool
+	// Header
+	fmt.Printf("%-10s %-10s %-10s %-10s %-50s\n", "STATUS", "SIZE", "WORDS", "DURATION", "URL")
+	fmt.Println(strings.Repeat("─", 100))
+
 	wordChan := make(chan string, f.config.Threads)
 	var wg sync.WaitGroup
 
-	// Start workers
 	for i := 0; i < f.config.Threads; i++ {
 		wg.Add(1)
 		go f.worker(ctx, wordChan, &wg)
 	}
 
-	// Feed words to workers
 	go func() {
 		for _, word := range words {
 			select {
 			case wordChan <- word:
 			case <-ctx.Done():
-				close(wordChan)
-				return
+				break
 			}
 		}
 		close(wordChan)
 	}()
 
-	// Wait for completion
 	wg.Wait()
 
+	// Clear progress bar line
+	fmt.Printf("\r\033[K")
+	
 	duration := time.Since(startTime)
-	fmt.Printf("\n✅ Fuzzing complete in %v\n", duration)
-	fmt.Printf("   Total: %d | Found: %d (%.2f%%)\n", f.total, f.found, float64(f.found)/float64(f.total)*100)
+	fmt.Println(color.BlueString("\n════════════════════════════════════════════════════════════"))
+	fmt.Printf(" :: Scan Finished in : %s\n", duration)
+	fmt.Printf(" :: Total Found      : %d\n", f.found)
+	fmt.Println(color.BlueString("════════════════════════════════════════════════════════════"))
 
 	return f.results, nil
 }
 
 func (f *Fuzzer) worker(ctx context.Context, words <-chan string, wg *sync.WaitGroup) {
 	defer wg.Done()
-
 	for word := range words {
 		select {
 		case <-ctx.Done():
@@ -136,25 +149,35 @@ func (f *Fuzzer) worker(ctx context.Context, words <-chan string, wg *sync.WaitG
 
 func (f *Fuzzer) processWord(word string) {
 	var targetURL string
-
 	switch f.config.Mode {
 	case ModeDirectory:
-		targetURL = fmt.Sprintf("%s/%s", f.config.Target, word)
+		// Ensure clean slash handling
+		base := strings.TrimRight(f.config.Target, "/")
+		targetURL = fmt.Sprintf("%s/%s", base, word)
 	case ModeVHost:
-		targetURL = f.config.Target // Will modify Host header
+		targetURL = f.config.Target
 	case ModeSubdomain:
-		targetURL = fmt.Sprintf("http://%s.%s", word, f.config.Target)
+		// Assume target is domain, prepend protocol if needed for request
+		if !strings.HasPrefix(f.config.Target, "http") {
+			targetURL = fmt.Sprintf("https://%s.%s", word, f.config.Target)
+		} else {
+			// Strip protocol to insert subdomain
+			parts := strings.SplitN(f.config.Target, "://", 2)
+			targetURL = fmt.Sprintf("%s://%s.%s", parts[0], word, parts[1])
+		}
 	}
 
 	start := time.Now()
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
+		f.incrementChecked()
 		return
 	}
 
-	// VHost mode: modify Host header
 	if f.config.Mode == ModeVHost {
+		// e.g. word.example.com
 		req.Host = fmt.Sprintf("%s.%s", word, f.config.Target)
+		req.URL.Host = f.config.Target // Request goes to IP/Domain
 	}
 
 	resp, err := f.client.Do(req)
@@ -166,7 +189,6 @@ func (f *Fuzzer) processWord(word string) {
 
 	duration := time.Since(start)
 
-	// Check if result matches criteria
 	if f.shouldSave(resp.StatusCode, int(resp.ContentLength)) {
 		result := FuzzResult{
 			URL:        targetURL,
@@ -175,7 +197,10 @@ func (f *Fuzzer) processWord(word string) {
 			WordUsed:   word,
 			Duration:   duration,
 		}
-
+		if f.config.Mode == ModeVHost {
+			result.URL = fmt.Sprintf("%s.%s", word, f.config.Target) // Display Host header
+		}
+		
 		f.addResult(result)
 		f.printResult(result)
 	}
@@ -184,25 +209,15 @@ func (f *Fuzzer) processWord(word string) {
 }
 
 func (f *Fuzzer) shouldSave(code, size int) bool {
-	// Filter by size
 	if f.config.FilterSize > 0 && size == f.config.FilterSize {
 		return false
 	}
-
-	// Filter codes
 	for _, fc := range f.config.FilterCodes {
-		if code == fc {
-			return false
-		}
+		if code == fc { return false }
 	}
-
-	// Match codes
 	for _, mc := range f.config.MatchCodes {
-		if code == mc {
-			return true
-		}
+		if code == mc { return true }
 	}
-
 	return false
 }
 
@@ -217,32 +232,40 @@ func (f *Fuzzer) incrementChecked() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checked++
-
-	// Print progress every 100 requests
-	if f.checked%100 == 0 {
-		progress := float64(f.checked) / float64(f.total) * 100
-		fmt.Printf("\r   Progress: %d/%d (%.1f%%) | Found: %d", f.checked, f.total, progress, f.found)
+	
+	// Update progress every 50 requests
+	if f.checked%50 == 0 || f.checked == f.total {
+		prog := float64(f.checked) / float64(f.total) * 100
+		fmt.Printf("\r\033[K[%s] %d/%d (%.1f%%)", 
+			color.CyanString("PROGRESS"), f.checked, f.total, prog)
 	}
 }
 
-func (f *Fuzzer) printResult(result FuzzResult) {
-	statusColor := getStatusColor(result.StatusCode)
-	fmt.Printf("\n   %s [Status: %d] [Size: %d] %s", statusColor, result.StatusCode, result.Size, result.URL)
-}
+func (f *Fuzzer) printResult(r FuzzResult) {
+	// Clear progress line first
+	fmt.Printf("\r\033[K")
 
-func getStatusColor(code int) string {
+	// Colorize Status
+	var statusStr string
 	switch {
-	case code >= 200 && code < 300:
-		return "✓"
-	case code >= 300 && code < 400:
-		return "↻"
-	case code == 401 || code == 403:
-		return "🔒"
-	case code >= 400 && code < 500:
-		return "✗"
-	case code >= 500:
-		return "💥"
+	case r.StatusCode >= 200 && r.StatusCode < 300:
+		statusStr = color.GreenString("%d", r.StatusCode)
+	case r.StatusCode >= 300 && r.StatusCode < 400:
+		statusStr = color.BlueString("%d", r.StatusCode)
+	case r.StatusCode >= 400 && r.StatusCode < 500:
+		statusStr = color.YellowString("%d", r.StatusCode)
+	case r.StatusCode >= 500:
+		statusStr = color.RedString("%d", r.StatusCode)
 	default:
-		return "?"
+		statusStr = fmt.Sprintf("%d", r.StatusCode)
 	}
+
+	// Format: Status | Size | Words | Duration | URL
+	fmt.Printf("%-19s %-10d %-10d %-10v %s\n", 
+		statusStr, 
+		r.Size, 
+		len(r.WordUsed), 
+		r.Duration.Round(time.Millisecond), 
+		r.URL,
+	)
 }

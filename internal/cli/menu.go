@@ -5,10 +5,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 	
 	"github.com/fatih/color"
+	"github.com/gianlucabassani/gosint/internal/crawler"
+	"github.com/gianlucabassani/gosint/internal/fuzzer"
 	"github.com/gianlucabassani/gosint/internal/scanner"
+	"github.com/gianlucabassani/gosint/internal/storage"
 )
 
 var (
@@ -24,6 +31,17 @@ func LaunchInteractiveMenu() {
 	
 	reader := bufio.NewReader(os.Stdin)
 	running := true
+	
+	// Set up signal handler for the menu
+	// Ctrl+C while in menu will exit the program
+	menuSigChan := make(chan os.Signal, 1)
+	signal.Notify(menuSigChan, os.Interrupt, syscall.SIGTERM)
+	
+	go func() {
+		<-menuSigChan
+		fmt.Println(yellow("\n👋 Thanks for using GOSINT! Goodbye!"))
+		os.Exit(0)
+	}()
 	
 	for running {
 		showMainMenu()
@@ -69,7 +87,7 @@ func showMainMenu() {
 	fmt.Println(blue("█"), "MAIN MENU")
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
 	fmt.Println(yellow("1."), "Domain Reconnaissance")
-	fmt.Println(yellow("2."), "Web Crawler & Scraping")
+	fmt.Println(yellow("2."), "Web Crawler & OSINT Scraping")
 	fmt.Println(yellow("3."), "Fuzzing") 
 	fmt.Println(yellow("4."), "OSINT Investigation")
 	fmt.Println(yellow("5."), "Settings")
@@ -98,29 +116,31 @@ func domainReconMenu(reader *bufio.Reader) {
 	fmt.Println("  4. Aggressive (full scan)")
 
 	modeChoice := promptInput(reader, cyan("Mode: "))
-
 	var mode scanner.ScanMode
 	switch modeChoice {
-	case "1", "":
-		mode = scanner.ModeBasic
-	case "2":
-		mode = scanner.ModeDeep
-	case "3":
-		mode = scanner.ModeStealth
-	case "4":
-		mode = scanner.ModeAggressive
-	default:
-		fmt.Println(red("✗ Invalid choice, using basic mode"))
-		mode = scanner.ModeBasic
+	case "1": mode = scanner.ModeBasic
+	case "2": mode = scanner.ModeDeep
+	case "3": mode = scanner.ModeStealth
+	case "4": mode = scanner.ModeAggressive
+	default: mode = scanner.ModeBasic
 	}
+	
+	fmt.Printf("\n%s\n", blue("═══════════════════════════════════════════════════"))
+	fmt.Printf("█ Starting %s scan for: %s\n", mode, domain)
+	fmt.Printf("%s\n", blue("═══════════════════════════════════════════════════"))
 
-	// Run scan
 	s := scanner.NewScanner(domain, mode)
-	ctx := context.Background()
-
+	// Create cancellable context for graceful shutdown on CTRL+C
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+	
 	_, err := s.Scan(ctx)
 	if err != nil {
-		fmt.Printf("\n%s Scan failed: %v\n", red("❌"), err)
+		if ctx.Err() == context.Canceled {
+			fmt.Printf("\n%s Scan interrupted by user\n", yellow("⚠️"))
+		} else {
+			fmt.Printf("\n%s Scan failed: %v\n", red("❌"), err)
+		}
 	}
 
 	pressEnterToContinue(reader)
@@ -129,23 +149,67 @@ func domainReconMenu(reader *bufio.Reader) {
 func crawlerMenu(reader *bufio.Reader) {
 	clearScreen()
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
-	fmt.Println(blue("█"), "WEB CRAWLER")
+	fmt.Println(blue("█"), "WEB CRAWLER - OSINT Data Extraction")
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
 	
 	url := promptInput(reader, cyan("Enter URL: "))
-	if url == "" {
-		fmt.Println(red("✗ URL cannot be empty"))
-		pressEnterToContinue(reader)
-		return
-	}
+	if url == "" { return }
 	
 	depthStr := promptInput(reader, cyan("Crawl depth (default: 2): "))
-	if depthStr == "" {
-		depthStr = "2"
+	depth := 2
+	if depthStr != "" {
+		if d, err := strconv.Atoi(depthStr); err == nil {
+			depth = d
+		}
 	}
 	
-	fmt.Printf("%s Starting crawl: %s (depth: %s)\n", green("✓"), url, depthStr)
-	fmt.Println(yellow("⚠  This feature will be implemented in Phase 2"))
+	if !strings.HasPrefix(url, "http") { url = "https://" + url }
+
+	fmt.Printf("\n%s Starting OSINT Crawl: %s (Depth: %d)\n", green("✓"), url, depth)
+	fmt.Printf("%s Extracting emails, phones, and metadata...\n", yellow("→"))
+	
+	// Create target DB entry
+	db := storage.GetInstance()
+	targetObj, _ := db.CreateOrUpdateTarget(url, "url")
+
+	// Configure Crawler
+	cfg := crawler.CrawlerConfig{
+		TargetURL:     url,
+		MaxDepth:      depth,
+		MaxConcurrent: 10,
+		Timeout:       5 * time.Second,
+		TargetID:      targetObj.ID,
+	}
+
+	// Create cancellable context for graceful shutdown on CTRL+C
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+
+	c := crawler.NewCrawler(cfg)
+	results, err := c.Start(ctx)
+	
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			fmt.Printf("\n%s Crawl interrupted by user\n", yellow("⚠️"))
+		} else {
+			fmt.Printf("\n%s Crawl failed: %v\n", red("✗"), err)
+		}
+	} else {
+		emails := 0
+		phones := 0
+		for _, r := range results {
+			emails += len(r.OSINT.Emails)
+			phones += len(r.OSINT.Phones)
+		}
+
+		fmt.Printf("\n\n%s CRAWL RESULTS\n", blue("═══════════════════════════════════════════════════"))
+		fmt.Printf("  Pages Visited: %d\n", len(results))
+		fmt.Printf("  Emails Found:  %d\n", emails)
+		fmt.Printf("  Phones Found:  %d\n", phones)
+		fmt.Printf("  Data saved to database (Target ID: %d)\n", targetObj.ID)
+		fmt.Printf("%s\n\n", blue("═══════════════════════════════════════════════════"))
+	}
+	
 	pressEnterToContinue(reader)
 }
 
@@ -164,11 +228,11 @@ func fuzzingMenu(reader *bufio.Reader) {
 
 	switch choice {
 	case "1":
-		directoryFuzzMenu(reader)
+		runInteractiveFuzz(reader, fuzzer.ModeDirectory)
 	case "2":
-		vhostFuzzMenu(reader)
+		runInteractiveFuzz(reader, fuzzer.ModeVHost)
 	case "3":
-		subdomainFuzzMenu(reader)
+		runInteractiveFuzz(reader, fuzzer.ModeSubdomain)
 	case "0":
 		return
 	default:
@@ -177,65 +241,90 @@ func fuzzingMenu(reader *bufio.Reader) {
 	}
 }
 
-func directoryFuzzMenu(reader *bufio.Reader) {
+func runInteractiveFuzz(reader *bufio.Reader, mode fuzzer.FuzzMode) {
 	clearScreen()
+	title := "DIRECTORY FUZZING"
+	targetPrompt := "Target URL (e.g., https://example.com): "
+	
+	if mode == fuzzer.ModeVHost {
+		title = "VHOST FUZZING"
+		targetPrompt = "Target Domain/IP: "
+	} else if mode == fuzzer.ModeSubdomain {
+		title = "SUBDOMAIN FUZZING"
+		targetPrompt = "Target Domain: "
+	}
+
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
-	fmt.Println(blue("█"), "DIRECTORY FUZZING")
+	fmt.Println(blue("█"), title)
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
 
-	url := promptInput(reader, cyan("Target URL (e.g., https://example.com): "))
-	if url == "" {
-		fmt.Println(red("✗ URL cannot be empty"))
+	target := promptInput(reader, cyan(targetPrompt))
+	if target == "" {
+		fmt.Println(red("✗ Target cannot be empty"))
 		pressEnterToContinue(reader)
 		return
 	}
 
+	wordlist := selectWordlist(reader, mode)
+	
+	threadsStr := promptInput(reader, cyan("Threads (default: 40): "))
+	threads := 40
+	if threadsStr != "" {
+		if t, err := strconv.Atoi(threadsStr); err == nil {
+			threads = t
+		}
+	}
+
+	config := fuzzer.FuzzerConfig{
+		Target:     target,
+		Mode:       mode,
+		Wordlist:   wordlist,
+		Threads:    threads,
+		Timeout:    10,
+		MatchCodes: []int{200, 204, 301, 302, 307, 401, 403},
+	}
+
+	fmt.Printf("\n%s Starting fuzzing...\n", green("✓"))
+	// Create cancellable context for graceful shutdown on CTRL+C
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+	
+	f := fuzzer.NewFuzzer(config)
+	results, err := f.Start(ctx)
+	if err != nil {
+		if ctx.Err() == context.Canceled {
+			fmt.Printf("\n%s Fuzzing interrupted by user\n", yellow("⚠️"))
+		} else {
+			fmt.Printf("\n%s Error: %v\n", red("✗"), err)
+		}
+	} else {
+		fmt.Printf("\n%s Fuzzing complete. Found %d items.\n", green("✓"), len(results))
+	}
+
+	pressEnterToContinue(reader)
+}
+
+func selectWordlist(reader *bufio.Reader, mode fuzzer.FuzzMode) string {
 	fmt.Println("\n" + yellow("Wordlist options:"))
-	fmt.Println("  1. Small (embedded, ~100 entries)")
-	fmt.Println("  2. Medium (embedded, ~1000 entries)")
-	fmt.Println("  3. Large (embedded, ~10000 entries)")
-	fmt.Println("  4. Custom file path")
+	fmt.Println("  1. Default Embedded List")
+	fmt.Println("  2. Custom file path")
 
-	wlChoice := promptInput(reader, cyan("Wordlist choice: "))
-	
-	var wordlist string
-	switch wlChoice {
-	case "1":
-		wordlist = "embedded:directories-small"
-	case "2":
-		wordlist = "embedded:directories"
-	case "3":
-		wordlist = "embedded:directories-large"
-	case "4":
-		wordlist = promptInput(reader, cyan("Enter wordlist path: "))
-	default:
-		wordlist = "embedded:directories"
+	choice := promptInput(reader, cyan("Wordlist choice: "))
+	if choice == "2" {
+		path := promptInput(reader, cyan("Enter wordlist path: "))
+		if path == "" {
+			fmt.Println(red("✗ Path cannot be empty, using default"))
+		} else {
+			return path
+		}
 	}
 
-	threads := promptInput(reader, cyan("Threads (default: 40): "))
-	if threads == "" {
-		threads = "40"
+	switch mode {
+	case fuzzer.ModeDirectory: return "embedded:directories"
+	case fuzzer.ModeSubdomain: return "embedded:subdomains"
+	case fuzzer.ModeVHost:     return "embedded:vhosts"
 	}
-
-	fmt.Printf("\n%s Starting directory fuzzing...\n", green("✓"))
-	fmt.Printf("  URL: %s\n", url)
-	fmt.Printf("  Wordlist: %s\n", wordlist)
-	fmt.Printf("  Threads: %s\n", threads)
-	
-	fmt.Println(yellow("\n⚠  Fuzzer will be integrated with scanner in Phase 2 completion"))
-	pressEnterToContinue(reader)
-}
-
-func vhostFuzzMenu(reader *bufio.Reader) {
-	// Similar implementation
-	fmt.Println(yellow("⚠  VHost fuzzing coming soon"))
-	pressEnterToContinue(reader)
-}
-
-func subdomainFuzzMenu(reader *bufio.Reader) {
-	// Similar implementation
-	fmt.Println(yellow("⚠  Subdomain fuzzing coming soon"))
-	pressEnterToContinue(reader)
+	return "embedded:directories"
 }
 
 func osintMenu(reader *bufio.Reader) {
@@ -292,30 +381,166 @@ func settingsMenu(reader *bufio.Reader) {
 }
 
 func databaseManagementMenu(reader *bufio.Reader) {
+	db := storage.GetInstance()
+
+	for {
+		clearScreen()
+		fmt.Println(blue("═══════════════════════════════════════════════════"))
+		fmt.Println(blue("█"), "DATABASE MANAGEMENT")
+		fmt.Println(blue("═══════════════════════════════════════════════════"))
+		fmt.Println(yellow("1."), "View Database Statistics")
+		fmt.Println(yellow("2."), "Clear Specific Table")
+		fmt.Println(yellow("3."), "Clear All Data (Reset DB)")
+		fmt.Println(yellow("0."), "Back to Main Menu")
+		fmt.Println()
+		
+		choice := promptInput(reader, cyan("Choice: "))
+		
+		switch choice {
+		case "1":
+			showDatabaseStats(reader, db)
+		case "2":
+			clearTableMenu(reader, db)
+		case "3":
+			clearAllData(reader, db)
+		case "0":
+			return
+		default:
+			fmt.Println(red("✗ Invalid choice"))
+			pressEnterToContinue(reader)
+		}
+	}
+}
+
+func showDatabaseStats(reader *bufio.Reader, db *storage.Database) {
+	stats := db.GetDatabaseStats()
+	
+	fmt.Println("\n" + blue("📊 Database Statistics"))
+	fmt.Println(strings.Repeat("─", 30))
+	
+	// Print in a specific order for better readability
+	keys := []string{"targets", "subdomains", "technologies", "scans", "fuzzing_hits"}
+	for _, key := range keys {
+		val := stats[key]
+		// Capitalize first letter
+		label := strings.Title(strings.ReplaceAll(key, "_", " "))
+		fmt.Printf("  %-15s : %s\n", label, green(val))
+	}
+	fmt.Println(strings.Repeat("─", 30))
+	
+	pressEnterToContinue(reader)
+}
+
+func clearTableMenu(reader *bufio.Reader, db *storage.Database) {
+	fmt.Println("\n" + yellow("Select table to clear:"))
+	fmt.Println("  1. Targets")
+	fmt.Println("  2. Subdomains")
+	fmt.Println("  3. Technologies")
+	fmt.Println("  4. Fuzzing Results")
+	fmt.Println("  5. Scan Results")
+	fmt.Println("  0. Cancel")
+
+	choice := promptInput(reader, cyan("Table: "))
+	var tableName string
+
+	switch choice {
+	case "1": tableName = "targets"
+	case "2": tableName = "subdomains"
+	case "3": tableName = "technologies"
+	case "4": tableName = "fuzz_results"
+	case "5": tableName = "scan_results"
+	case "0": return
+	default:
+		fmt.Println(red("✗ Invalid table choice"))
+		pressEnterToContinue(reader)
+		return
+	}
+
+	confirm := promptInput(reader, red(fmt.Sprintf("⚠ Are you sure you want to clear '%s'? (y/N): ", tableName)))
+	if strings.ToLower(confirm) == "y" {
+		if err := db.ClearTable(tableName); err != nil {
+			fmt.Printf("%s Error clearing table: %v\n", red("✗"), err)
+		} else {
+			fmt.Printf("%s Table '%s' cleared successfully.\n", green("✓"), tableName)
+		}
+	} else {
+		fmt.Println(yellow("Operation cancelled."))
+	}
+	pressEnterToContinue(reader)
+}
+
+func clearAllData(reader *bufio.Reader, db *storage.Database) {
+	fmt.Println()
+	fmt.Println(red("████ WARNING ████"))
+	fmt.Println(red("This will delete ALL data from the database."))
+	fmt.Println(red("This action cannot be undone."))
+	
+	confirm := promptInput(reader, red("Type 'DELETE' to confirm: "))
+	if confirm == "DELETE" {
+		fmt.Print(yellow("Resetting database... "))
+		if err := db.ClearAllTables(); err != nil {
+			fmt.Printf("\n%s Error: %v\n", red("✗"), err)
+		} else {
+			fmt.Println(green("Done!"))
+			fmt.Println("All tables have been truncated.")
+		}
+	} else {
+		fmt.Println(yellow("Operation cancelled."))
+	}
+	pressEnterToContinue(reader)
+}
+
+// viewDatabaseStats displays current database statistics
+func viewDatabaseStats(reader *bufio.Reader) {
+	db := storage.GetInstance()
+	if db == nil {
+		fmt.Println(red("✗ Database not initialized"))
+		pressEnterToContinue(reader)
+		return
+	}
+
 	clearScreen()
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
-	fmt.Println(blue("█"), "DATABASE MANAGEMENT")
+	fmt.Println(blue("█"), "DATABASE STATISTICS")
 	fmt.Println(blue("═══════════════════════════════════════════════════"))
-	fmt.Println(yellow("1."), "View Database Statistics")
-	fmt.Println(yellow("2."), "Backup Database")
-	fmt.Println(yellow("3."), "Clear Specific Table")
-	fmt.Println(yellow("4."), "Clear All Data")
-	fmt.Println(yellow("5."), "Export Data")
-	fmt.Println(yellow("0."), "Back")
+	
+	stats := db.GetDatabaseStats()
+	
+	fmt.Printf("  %s Targets: %d\n", green("✓"), stats["targets"])
+	fmt.Printf("  %s Scan Results: %d\n", green("✓"), stats["scans"])
+	fmt.Printf("  %s Subdomains: %d\n", green("✓"), stats["subdomains"])
+	fmt.Printf("  %s Technologies: %d\n", green("✓"), stats["technologies"])
+	fmt.Printf("  %s Fuzzing Hits: %d\n", green("✓"), stats["fuzzing_hits"])
+	
+	fmt.Println()
+	pressEnterToContinue(reader)
+}
+
+// clearAllDatabase prompts user to confirm and clear all database
+func clearAllDatabase(reader *bufio.Reader) {
+	clearScreen()
+	fmt.Println(blue("═══════════════════════════════════════════════════"))
+	fmt.Println(blue("█"), "CLEAR ALL DATABASE")
+	fmt.Println(blue("═══════════════════════════════════════════════════"))
+	fmt.Println(red("⚠  WARNING: This will delete ALL scanned data!"))
 	fmt.Println()
 	
-	choice := promptInput(reader, cyan("Choice: "))
+	confirm := promptInput(reader, cyan("Type 'DELETE' to confirm: "))
 	
-	switch choice {
-	case "1", "2", "3", "4", "5":
-		fmt.Println(yellow("⚠  Database features will be implemented in Phase 2"))
-		pressEnterToContinue(reader)
-	case "0":
-		return
-	default:
-		fmt.Println(red("✗ Invalid choice"))
-		pressEnterToContinue(reader)
+	if confirm == "DELETE" {
+		db := storage.GetInstance()
+		if db != nil {
+			if err := db.ClearTable("targets"); err == nil {
+				fmt.Printf("%s Database cleared successfully\n", green("✓"))
+			} else {
+				fmt.Printf("%s Failed to clear database: %v\n", red("✗"), err)
+			}
+		}
+	} else {
+		fmt.Println(yellow("↻ Operation cancelled"))
 	}
+	
+	pressEnterToContinue(reader)
 }
 
 // Helper functions

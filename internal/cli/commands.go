@@ -1,11 +1,38 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"github.com/spf13/cobra"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
+
+	"github.com/gianlucabassani/gosint/internal/crawler"
+	"github.com/gianlucabassani/gosint/internal/fuzzer"
+	"github.com/gianlucabassani/gosint/internal/scanner"
+	"github.com/gianlucabassani/gosint/internal/storage"
+	"github.com/spf13/cobra"
 )
+
+// CreateCancellableContext creates a context that cancels on CTRL+C signal
+// Used for long-running operations - Ctrl+C will cancel the operation but return to menu
+func CreateCancellableContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	
+	// Create a local signal channel for this operation
+	opSigChan := make(chan os.Signal, 1)
+	signal.Notify(opSigChan, os.Interrupt, syscall.SIGTERM)
+	
+	go func() {
+		<-opSigChan
+		fmt.Printf("\n\n⚠️  Received interrupt signal, stopping operation...\n\n")
+		cancel()
+	}()
+	
+	return ctx, cancel
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "gosint",
@@ -70,36 +97,101 @@ Only ONE mode can be active at a time.`,
 			os.Exit(1)
 		}
 		
-		// Display scan info
-		fmt.Printf("Starting %s scan for: %s\n", selectedMode, target)
-		printScanModeInfo(selectedMode)
+		// Convert mode string to scanner.ScanMode
+		var mode scanner.ScanMode
+		switch selectedMode {
+		case "basic":
+			mode = scanner.ModeBasic
+		case "deep":
+			mode = scanner.ModeDeep
+		case "stealth":
+			mode = scanner.ModeStealth
+		case "aggressive":
+			mode = scanner.ModeAggressive
+		}
 		
-		// TODO: Call scanner module with selected mode
-		fmt.Println("\n⚠  Scanner implementation coming in Phase 2")
+		// Execute the scan
+		s := scanner.NewScanner(target, mode)
+		
+		// Create cancellable context for graceful shutdown on CTRL+C
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+		
+		report, err := s.Scan(ctx)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				fmt.Printf("\n%s Scan interrupted by user\n", "⚠️")
+			} else {
+				fmt.Printf("\n❌ Scan failed: %v\n", err)
+			}
+			return
+		}
 		
 		// After scan completes, offer report generation
-		offerReportGeneration(target)
+		offerReportGeneration(report.Target)
 	},
 }
 
 var crawlCmd = &cobra.Command{
 	Use:   "crawl",
-	Short: "Crawl a website",
+	Short: "Crawl a website for OSINT data (Emails, Phones, etc.)",
 	Run: func(cmd *cobra.Command, args []string) {
-		url, _ := cmd.Flags().GetString("url")
+		urlStr, _ := cmd.Flags().GetString("url")
 		depth, _ := cmd.Flags().GetInt("depth")
 		
-		if url == "" {
-			fmt.Println("Error: --url/-u flag is required")
+		if urlStr == "" {
+			fmt.Println("❌ Error: --url/-u flag is required")
 			os.Exit(1)
 		}
 		
-		fmt.Printf("🕷️  Crawling URL: %s (depth: %d)\n", url, depth)
-		// TODO: Call crawler module
-		fmt.Println("⚠Crawler implementation coming in Phase 3")
+		// Add protocol if missing
+		if !strings.HasPrefix(urlStr, "http") {
+			urlStr = "https://" + urlStr
+		}
+
+		// Create target in DB to attach results
+		db := storage.GetInstance()
+		targetObj, _ := db.CreateOrUpdateTarget(urlStr, "url")
 		
-		// After crawl completes, offer report generation
-		offerReportGeneration(url)
+		fmt.Printf("🕷️  Starting OSINT Crawl: %s (Depth: %d)\n", urlStr, depth)
+
+		config := crawler.CrawlerConfig{
+			TargetURL:     urlStr,
+			MaxDepth:      depth,
+			MaxConcurrent: 10,
+			Timeout:       5 * time.Second,
+			TargetID:      targetObj.ID,
+		}
+
+		// Create cancellable context for graceful shutdown on CTRL+C
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		c := crawler.NewCrawler(config)
+		results, err := c.Start(ctx)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				fmt.Printf("\n%s Crawl interrupted by user\n", "⚠️")
+			} else {
+				fmt.Printf("\n❌ Crawl failed: %v\n", err)
+			}
+			return
+		}
+
+		// Summary
+		var emails, phones int
+		for _, r := range results {
+			emails += len(r.OSINT.Emails)
+			phones += len(r.OSINT.Phones)
+		}
+
+		fmt.Printf("\n✅ Crawl Complete\n")
+		fmt.Printf("   Pages Visited: %d\n", len(results))
+		fmt.Printf("   Emails Found:  %d\n", emails)
+		fmt.Printf("   Phones Found:  %d\n", phones)
+		fmt.Printf("   Data saved to database for target ID: %d\n", targetObj.ID)
+		
+		offerReportGeneration(urlStr)
 	},
 }
 
@@ -174,41 +266,82 @@ Example:
   gosint fuzz -t example.com -m subdomain -w embedded:subdomains`,
 	Run: func(cmd *cobra.Command, args []string) {
 		target, _ := cmd.Flags().GetString("target")
-		url, _ := cmd.Flags().GetString("url")
-		mode, _ := cmd.Flags().GetString("mode")
+		urlStr, _ := cmd.Flags().GetString("url")
+		modeStr, _ := cmd.Flags().GetString("mode")
 		wordlist, _ := cmd.Flags().GetString("wordlist")
 		threads, _ := cmd.Flags().GetInt("threads")
-		timeout, _ := cmd.Flags().GetInt("timeout")
 
-		// Validate inputs
-		if target == "" && url == "" {
-			fmt.Println("❌ Error: Either --target or --url is required")
+		effectiveTarget := urlStr
+		if effectiveTarget == "" {
+			effectiveTarget = target
+		}
+
+		if effectiveTarget == "" {
+			fmt.Println("❌ Error: --url or --target is required")
 			os.Exit(1)
 		}
 
-		if mode == "" {
+		if modeStr == "" {
 			fmt.Println("❌ Error: --mode is required (directory, vhost, subdomain)")
 			os.Exit(1)
 		}
 
+		// Map CLI mode string to fuzzer mode enum
+		var mode fuzzer.FuzzMode
+		switch modeStr {
+		case "directory":
+			mode = fuzzer.ModeDirectory
+		case "vhost":
+			mode = fuzzer.ModeVHost
+		case "subdomain":
+			mode = fuzzer.ModeSubdomain
+		default:
+			fmt.Println("❌ Error: Invalid mode. Use directory, vhost, or subdomain")
+			os.Exit(1)
+		}
+
 		if wordlist == "" {
-			wordlist = fmt.Sprintf("embedded:%ss", mode) // Default to embedded
+			// Auto-select embedded lists
+			switch mode {
+			case fuzzer.ModeDirectory:
+				wordlist = "embedded:directories"
+			case fuzzer.ModeSubdomain:
+				wordlist = "embedded:subdomains"
+			case fuzzer.ModeVHost:
+				wordlist = "embedded:vhosts"
+			}
 		}
 
-		// Determine target
-		fuzzTarget := url
-		if fuzzTarget == "" {
-			fuzzTarget = target
+		config := fuzzer.FuzzerConfig{
+			Target:   effectiveTarget,
+			Mode:     mode,
+			Wordlist: wordlist,
+			Threads:  threads,
+			Timeout:  10,
 		}
 
-		fmt.Printf("🎯 Starting %s fuzzing on %s\n", mode, fuzzTarget)
-		fmt.Printf("   Threads: %d | Timeout: %ds\n", threads, timeout)
-		fmt.Println("⚠  Fuzzer implementation coming in Phase 2 (scaffold ready)")
+		fmt.Printf("🎯 Starting %s fuzzing on %s\n", modeStr, effectiveTarget)
+		fmt.Printf("   Wordlist: %s\n", wordlist)
+		fmt.Printf("   Threads: %d\n", threads)
+
+		// Create cancellable context for graceful shutdown on CTRL+C
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		f := fuzzer.NewFuzzer(config)
+		results, err := f.Start(ctx)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				fmt.Printf("\n%s Fuzzing interrupted by user\n", "⚠️")
+			} else {
+				fmt.Printf("\n❌ Fuzzing failed: %v\n", err)
+			}
+			return
+		}
+
+		fmt.Printf("\n✨ Fuzzing Complete: Found %d items\n", len(results))
 		
-		// TODO: Call fuzzer module
-		// config := fuzzer.FuzzerConfig{...}
-		// f := fuzzer.NewFuzzer(config)
-		// results, err := f.Start(context.Background())
+		// TODO: Save to DB (Phase 3 enhancement)
 	},
 }
 

@@ -1,46 +1,188 @@
 package scanner
 
 import (
+	"crypto/tls"
+	"io/ioutil"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
 
-func DetectTechnologies(url string) []string {
-	var technologies []string
+// TechResult holds all detected technologies
+type TechResult struct {
+	WebServer       string            `json:"web_server"`
+	Frameworks      []string          `json:"frameworks"`
+	JSLibraries     []string          `json:"js_libraries"`
+	Analytics       []string          `json:"analytics"`
+	SecurityHeaders map[string]string `json:"security_headers"`
+	MetaTags        map[string]string `json:"meta_tags"`
+}
 
+// AnalyzeTech performs comprehensive technology detection by analyzing HTTP responses
+// This is the full-featured version ported from Browsint's web_analysis.py
+func AnalyzeTech(targetURL string) (*TechResult, error) {
+	if !strings.HasPrefix(targetURL, "http") {
+		targetURL = "https://" + targetURL
+	}
+
+	result := &TechResult{
+		Frameworks:      []string{},
+		JSLibraries:     []string{},
+		Analytics:       []string{},
+		SecurityHeaders: make(map[string]string),
+		MetaTags:        make(map[string]string),
+	}
+
+	// 1. Fetch Content with SSL skip (match Browsint's behavior)
 	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
 
-	resp, err := client.Get(url)
+	resp, err := client.Get(targetURL)
 	if err != nil {
-		return technologies
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	// Check Server header
-	if server := resp.Header.Get("Server"); server != "" {
-		technologies = append(technologies, "Server: "+server)
+	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	body := string(bodyBytes)
+	headers := resp.Header
+
+	// 2. Server Header
+	if server := headers.Get("Server"); server != "" {
+		result.WebServer = server
 	}
 
-	// Check X-Powered-By
-	if powered := resp.Header.Get("X-Powered-By"); powered != "" {
-		technologies = append(technologies, "Powered-By: "+powered)
+	// 3. Detect Frameworks / CMS
+	detectFrameworks(result, headers, body, targetURL)
+
+	// 4. Detect JS Libraries
+	detectJSLibraries(result, body)
+
+	// 5. Detect Analytics
+	detectAnalytics(result, body)
+
+	// 6. Check Security Headers
+	checkSecurityHeaders(result, headers)
+
+	return result, nil
+}
+
+func detectFrameworks(r *TechResult, headers http.Header, body string, url string) {
+	// Header Checks
+	if powered := headers.Get("X-Powered-By"); powered != "" {
+		r.Frameworks = append(r.Frameworks, "Powered-By: "+powered)
+	}
+	if gen := headers.Get("X-Generator"); gen != "" {
+		r.Frameworks = append(r.Frameworks, "Generator: "+gen)
 	}
 
-	// Check for common frameworks in headers
-	for key := range resp.Header {
-		keyLower := strings.ToLower(key)
-		if strings.Contains(keyLower, "wordpress") {
-			technologies = append(technologies, "WordPress")
-		} else if strings.Contains(keyLower, "drupal") {
-			technologies = append(technologies, "Drupal")
+	// Meta Generator Check (Regex for <meta name="generator" content="...">)
+	metaGenRe := regexp.MustCompile(`(?i)<meta[^>]*name=["']generator["'][^>]*content=["']([^"']+)["']`)
+	if match := metaGenRe.FindStringSubmatch(body); len(match) > 1 {
+		r.Frameworks = append(r.Frameworks, strings.TrimSpace(match[1]))
+	}
+
+	// Content Signatures (Ported from Browsint)
+	if strings.Contains(body, "wp-content") || strings.Contains(body, "wp-includes") {
+		addUnique(r, "WordPress")
+	}
+	if strings.Contains(body, "drupal-css") {
+		addUnique(r, "Drupal")
+	}
+	if strings.Contains(body, "joomla") {
+		addUnique(r, "Joomla")
+	}
+	if strings.Contains(body, "Powered by Shopify") {
+		addUnique(r, "Shopify")
+	}
+	if strings.Contains(body, "squarespace.com") {
+		addUnique(r, "Squarespace")
+	}
+	if strings.Contains(body, "wix.com") {
+		addUnique(r, "Wix")
+	}
+
+	// URL Pattern Checks
+	if strings.Contains(url, "/wp-admin") || strings.Contains(url, "/wp-login") {
+		addUnique(r, "WordPress")
+	}
+}
+
+func detectJSLibraries(r *TechResult, body string) {
+	// Pattern map ported from Browsint
+	patterns := map[string]string{
+		"jQuery":       `jquery(-[0-9\.]*(\.min)?\.js|\.js)|window\.jQuery|\$\(|jQuery\(`,
+		"React":        `react(-dom)?(-[0-9\.]*(\.min)?\.js|\.js)|React\.createElement|ReactDOM\.render`,
+		"Angular":      `angular(-[0-9\.]*(\.min)?\.js|\.js)|ng-app|angular\.module`,
+		"Vue.js":       `vue(-[0-9\.]*(\.min)?\.js|\.js)|new Vue\(`,
+		"Bootstrap":    `bootstrap(-[0-9\.]*(\.bundle|\.min)?\.js|\.js)`,
+		"Lodash":       `lodash(-[0-9\.]*(\.min)?\.js|\.js)`,
+		"Moment.js":    `moment(-[0-9\.]*(\.min)?\.js|\.js)`,
+		"D3.js":        `d3(-[0-9\.]*(\.min)?\.js|\.js)`,
+	}
+
+	for name, pattern := range patterns {
+		re := regexp.MustCompile("(?i)" + pattern)
+		if re.MatchString(body) {
+			r.JSLibraries = append(r.JSLibraries, name)
 		}
 	}
+}
 
-	return technologies
+func detectAnalytics(r *TechResult, body string) {
+	// Signatures ported from Browsint
+	if regexp.MustCompile(`(www\.google-analytics\.com/analytics\.js|gtag\('config', 'UA-|gtag\('config', 'G-)`).MatchString(body) {
+		r.Analytics = append(r.Analytics, "Google Analytics")
+	}
+	if strings.Contains(body, "googletagmanager.com/gtm.js") {
+		r.Analytics = append(r.Analytics, "Google Tag Manager")
+	}
+	if strings.Contains(body, "connect.facebook.net/en_US/fbevents.js") || strings.Contains(body, "fbq('init'") {
+		r.Analytics = append(r.Analytics, "Facebook Pixel")
+	}
+	if strings.Contains(body, "matomo.js") || strings.Contains(body, "piwik.js") {
+		r.Analytics = append(r.Analytics, "Matomo")
+	}
+	if strings.Contains(body, "static.hotjar.com") || strings.Contains(body, "hj('event'") {
+		r.Analytics = append(r.Analytics, "Hotjar")
+	}
+	if strings.Contains(body, "js.hs-scripts.com") {
+		r.Analytics = append(r.Analytics, "HubSpot")
+	}
+}
+
+func checkSecurityHeaders(r *TechResult, headers http.Header) {
+	// Ported map
+	secHeaders := map[string]string{
+		"Strict-Transport-Security": "HSTS",
+		"Content-Security-Policy":   "CSP",
+		"X-Frame-Options":           "X-Frame-Options",
+		"X-Content-Type-Options":    "X-Content-Type-Options",
+		"Referrer-Policy":           "Referrer-Policy",
+		"Permissions-Policy":        "Permissions-Policy",
+		"X-XSS-Protection":          "X-XSS-Protection",
+	}
+
+	for header, display := range secHeaders {
+		if val := headers.Get(header); val != "" {
+			r.SecurityHeaders[display] = val
+		}
+	}
+}
+
+func addUnique(r *TechResult, val string) {
+	for _, v := range r.Frameworks {
+		if v == val {
+			return
+		}
+	}
+	r.Frameworks = append(r.Frameworks, val)
 }
