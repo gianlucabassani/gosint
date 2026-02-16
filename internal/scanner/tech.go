@@ -20,7 +20,6 @@ type TechResult struct {
 }
 
 // AnalyzeTech performs comprehensive technology detection by analyzing HTTP responses
-// This is the full-featured version ported from Browsint's web_analysis.py
 func AnalyzeTech(targetURL string) (*TechResult, error) {
 	if !strings.HasPrefix(targetURL, "http") {
 		targetURL = "https://" + targetURL
@@ -34,7 +33,7 @@ func AnalyzeTech(targetURL string) (*TechResult, error) {
 		MetaTags:        make(map[string]string),
 	}
 
-	// 1. Fetch Content with SSL skip (match Browsint's behavior)
+	// Fetch Content with SSL skip
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
@@ -55,21 +54,21 @@ func AnalyzeTech(targetURL string) (*TechResult, error) {
 	body := string(bodyBytes)
 	headers := resp.Header
 
-	// 2. Server Header
+	// Server Header
 	if server := headers.Get("Server"); server != "" {
 		result.WebServer = server
 	}
 
-	// 3. Detect Frameworks / CMS
+	// Detect Frameworks / CMS
 	detectFrameworks(result, headers, body, targetURL)
 
-	// 4. Detect JS Libraries
+	// Detect JS Libraries
 	detectJSLibraries(result, body)
 
-	// 5. Detect Analytics
+	// Detect Analytics
 	detectAnalytics(result, body)
 
-	// 6. Check Security Headers
+	// Check Security Headers
 	checkSecurityHeaders(result, headers)
 
 	return result, nil
@@ -84,13 +83,13 @@ func detectFrameworks(r *TechResult, headers http.Header, body string, url strin
 		r.Frameworks = append(r.Frameworks, "Generator: "+gen)
 	}
 
-	// Meta Generator Check (Regex for <meta name="generator" content="...">)
+	// Meta Generator Check
 	metaGenRe := regexp.MustCompile(`(?i)<meta[^>]*name=["']generator["'][^>]*content=["']([^"']+)["']`)
 	if match := metaGenRe.FindStringSubmatch(body); len(match) > 1 {
 		r.Frameworks = append(r.Frameworks, strings.TrimSpace(match[1]))
 	}
 
-	// Content Signatures (Ported from Browsint)
+	// Content Signatures
 	if strings.Contains(body, "wp-content") || strings.Contains(body, "wp-includes") {
 		addUnique(r, "WordPress")
 	}
@@ -117,16 +116,16 @@ func detectFrameworks(r *TechResult, headers http.Header, body string, url strin
 }
 
 func detectJSLibraries(r *TechResult, body string) {
-	// Pattern map ported from Browsint
+	// Pattern map
 	patterns := map[string]string{
-		"jQuery":       `jquery(-[0-9\.]*(\.min)?\.js|\.js)|window\.jQuery|\$\(|jQuery\(`,
-		"React":        `react(-dom)?(-[0-9\.]*(\.min)?\.js|\.js)|React\.createElement|ReactDOM\.render`,
-		"Angular":      `angular(-[0-9\.]*(\.min)?\.js|\.js)|ng-app|angular\.module`,
-		"Vue.js":       `vue(-[0-9\.]*(\.min)?\.js|\.js)|new Vue\(`,
-		"Bootstrap":    `bootstrap(-[0-9\.]*(\.bundle|\.min)?\.js|\.js)`,
-		"Lodash":       `lodash(-[0-9\.]*(\.min)?\.js|\.js)`,
-		"Moment.js":    `moment(-[0-9\.]*(\.min)?\.js|\.js)`,
-		"D3.js":        `d3(-[0-9\.]*(\.min)?\.js|\.js)`,
+		"jQuery":    `jquery(-[0-9\.]*(\.min)?\.js|\.js)|window\.jQuery|\$\(|jQuery\(`,
+		"React":     `react(-dom)?(-[0-9\.]*(\.min)?\.js|\.js)|React\.createElement|ReactDOM\.render`,
+		"Angular":   `angular(-[0-9\.]*(\.min)?\.js|\.js)|ng-app|angular\.module`,
+		"Vue.js":    `vue(-[0-9\.]*(\.min)?\.js|\.js)|new Vue\(`,
+		"Bootstrap": `bootstrap(-[0-9\.]*(\.bundle|\.min)?\.js|\.js)`,
+		"Lodash":    `lodash(-[0-9\.]*(\.min)?\.js|\.js)`,
+		"Moment.js": `moment(-[0-9\.]*(\.min)?\.js|\.js)`,
+		"D3.js":     `d3(-[0-9\.]*(\.min)?\.js|\.js)`,
 	}
 
 	for name, pattern := range patterns {
@@ -138,7 +137,6 @@ func detectJSLibraries(r *TechResult, body string) {
 }
 
 func detectAnalytics(r *TechResult, body string) {
-	// Signatures ported from Browsint
 	if regexp.MustCompile(`(www\.google-analytics\.com/analytics\.js|gtag\('config', 'UA-|gtag\('config', 'G-)`).MatchString(body) {
 		r.Analytics = append(r.Analytics, "Google Analytics")
 	}
@@ -160,7 +158,6 @@ func detectAnalytics(r *TechResult, body string) {
 }
 
 func checkSecurityHeaders(r *TechResult, headers http.Header) {
-	// Ported map
 	secHeaders := map[string]string{
 		"Strict-Transport-Security": "HSTS",
 		"Content-Security-Policy":   "CSP",

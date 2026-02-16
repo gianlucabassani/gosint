@@ -17,11 +17,9 @@ import (
 )
 
 // CreateCancellableContext creates a context that cancels on CTRL+C signal
-// Used for long-running operations - Ctrl+C will cancel the operation but return to menu
 func CreateCancellableContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	
-	// Create a local signal channel for this operation
 	opSigChan := make(chan os.Signal, 1)
 	signal.Notify(opSigChan, os.Interrupt, syscall.SIGTERM)
 	
@@ -40,83 +38,85 @@ var rootCmd = &cobra.Command{
 	Long: `GOSINT is a powerful OSINT tool built in Go for domain reconnaissance,
 web crawling, and intelligence gathering.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// If no subcommand, launch interactive menu
 		if len(args) == 0 {
 			LaunchInteractiveMenu()
 		}
 	},
 }
 
-// ✅ ENHANCED: Scan command with 4 scan modes
 var scanCmd = &cobra.Command{
 	Use:   "scan",
-	Short: "Scan a target domain with various intensity levels",
+	Short: "Scan a target domain with various intensity levels or custom configuration",
 	Long: `Scan a target domain with different modes:
 	
+Predefined Modes:
   --basic (-b):      Passive reconnaissance (DNS, WHOIS, public records)
   --deep (-d):       Deep passive scan (subdomains, tech detection, extensive enumeration)
   --stealth (-s):    Active but stealthy scan (slow, rate-limited probing)
   --aggressive (-a): Full active + passive scan (fast, comprehensive, may trigger alerts)
-	
-Only ONE mode can be active at a time.`,
+
+Custom Mode:
+  --custom (-c):     Use custom flags to configure exactly what you want
+
+Custom Flags (only work with --custom):
+  --enable-dns            Enable DNS enumeration
+  --enable-whois          Enable WHOIS lookup
+  --enable-tech           Enable technology detection
+  --enable-passive        Enable passive recon (crt.sh, Wayback)
+  --enable-subdomains     Enable subdomain enumeration
+  --enable-fuzzing        Enable directory/vhost fuzzing
+  --subdomain-limit N     Limit subdomain wordlist to N entries (0=unlimited)
+  --subdomain-threads N   Number of concurrent subdomain checks (default: 10)
+  --fuzz-threads N        Number of concurrent fuzzing threads (default: 40)
+  --fuzz-directories      Enable directory fuzzing
+  --fuzz-vhosts           Enable virtual host fuzzing
+  --http-timeout N        HTTP request timeout in seconds (default: 10)
+  --verbose               Show detailed output
+
+Examples:
+  # Predefined mode
+  gosint scan -t example.com --basic
+  
+  # Custom scan: Only DNS + Tech detection
+  gosint scan -t example.com --custom --enable-dns --enable-tech
+  
+  # Custom scan: Everything but fuzzing, verbose output
+  gosint scan -t example.com --custom --enable-dns --enable-whois --enable-tech \
+    --enable-passive --enable-subdomains --verbose
+  
+  # Custom scan: Aggressive subdomain enum only
+  gosint scan -t example.com --custom --enable-subdomains --subdomain-limit 0 \
+    --subdomain-threads 50 --verbose
+`,
 	Run: func(cmd *cobra.Command, args []string) {
 		target, _ := cmd.Flags().GetString("target")
-		basic, _ := cmd.Flags().GetBool("basic")
-		deep, _ := cmd.Flags().GetBool("deep")
-		stealth, _ := cmd.Flags().GetBool("stealth")
-		aggressive, _ := cmd.Flags().GetBool("aggressive")
-		
 		if target == "" {
-			fmt.Println("Error: --target/-t flag is required")
+			fmt.Println("❌ Error: --target/-t flag is required")
 			os.Exit(1)
 		}
+
+		// Check if custom mode
+		custom, _ := cmd.Flags().GetBool("custom")
 		
-		// Validate only one mode is selected
-		modeCount := 0
-		selectedMode := "basic" // Default
+		var config scanner.ScanConfig
 		
-		if basic {
-			modeCount++
-			selectedMode = "basic"
+		if custom {
+			// Build custom configuration from flags
+			config = buildCustomConfig(cmd, target)
+		} else {
+			// Use predefined mode
+			mode := getSelectedMode(cmd)
+			config = scanner.ScanConfig{
+				Target: target,
+				Mode:   mode,
+			}
 		}
-		if deep {
-			modeCount++
-			selectedMode = "deep"
-		}
-		if stealth {
-			modeCount++
-			selectedMode = "stealth"
-		}
-		if aggressive {
-			modeCount++
-			selectedMode = "aggressive"
-		}
-		
-		if modeCount > 1 {
-			fmt.Println("❌ Error: Only one scan mode can be selected at a time")
-			os.Exit(1)
-		}
-		
-		// Convert mode string to scanner.ScanMode
-		var mode scanner.ScanMode
-		switch selectedMode {
-		case "basic":
-			mode = scanner.ModeBasic
-		case "deep":
-			mode = scanner.ModeDeep
-		case "stealth":
-			mode = scanner.ModeStealth
-		case "aggressive":
-			mode = scanner.ModeAggressive
-		}
-		
-		// Execute the scan
-		s := scanner.NewScanner(target, mode)
-		
-		// Create cancellable context for graceful shutdown on CTRL+C
+
+		// Execute scan
+		s := scanner.NewScanner(config)
 		ctx, cancel := CreateCancellableContext()
 		defer cancel()
-		
+
 		report, err := s.Scan(ctx)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
@@ -126,10 +126,92 @@ Only ONE mode can be active at a time.`,
 			}
 			return
 		}
-		
-		// After scan completes, offer report generation
+
 		offerReportGeneration(report.Target)
 	},
+}
+
+// getSelectedMode determines which predefined mode was selected
+func getSelectedMode(cmd *cobra.Command) scanner.ScanMode {
+	basic, _ := cmd.Flags().GetBool("basic")
+	deep, _ := cmd.Flags().GetBool("deep")
+	stealth, _ := cmd.Flags().GetBool("stealth")
+	aggressive, _ := cmd.Flags().GetBool("aggressive")
+
+	modeCount := 0
+	if basic { modeCount++ }
+	if deep { modeCount++ }
+	if stealth { modeCount++ }
+	if aggressive { modeCount++ }
+
+	if modeCount > 1 {
+		fmt.Println("❌ Error: Only one scan mode can be selected at a time")
+		os.Exit(1)
+	}
+
+	switch {
+	case deep:
+		return scanner.ModeDeep
+	case stealth:
+		return scanner.ModeStealth
+	case aggressive:
+		return scanner.ModeAggressive
+	default:
+		return scanner.ModeBasic
+	}
+}
+
+// buildCustomConfig creates a ScanConfig from custom flags
+func buildCustomConfig(cmd *cobra.Command, target string) scanner.ScanConfig {
+	config := scanner.ScanConfig{
+		Target: target,
+		Mode:   scanner.ModeCustom,
+	}
+
+	// Feature toggles
+	config.EnableDNS, _ = cmd.Flags().GetBool("enable-dns")
+	config.EnableWHOIS, _ = cmd.Flags().GetBool("enable-whois")
+	config.EnableTechDetection, _ = cmd.Flags().GetBool("enable-tech")
+	config.EnablePassive, _ = cmd.Flags().GetBool("enable-passive")
+	config.EnableSubdomains, _ = cmd.Flags().GetBool("enable-subdomains")
+	config.EnableFuzzing, _ = cmd.Flags().GetBool("enable-fuzzing")
+
+	// Performance settings
+	config.SubdomainLimit, _ = cmd.Flags().GetInt("subdomain-limit")
+	config.SubdomainThreads, _ = cmd.Flags().GetInt("subdomain-threads")
+	config.FuzzThreads, _ = cmd.Flags().GetInt("fuzz-threads")
+	config.HTTPTimeout, _ = cmd.Flags().GetInt("http-timeout")
+
+	// Fuzzing settings
+	config.FuzzDirectories, _ = cmd.Flags().GetBool("fuzz-directories")
+	config.FuzzVHosts, _ = cmd.Flags().GetBool("fuzz-vhosts")
+	config.FuzzWordlist, _ = cmd.Flags().GetString("fuzz-wordlist")
+
+	// Output settings
+	config.Verbose, _ = cmd.Flags().GetBool("verbose")
+	config.ShowProgress = true
+	config.SaveToDB = true
+
+	// Apply defaults for unset values
+	if config.SubdomainThreads == 0 {
+		config.SubdomainThreads = 10
+	}
+	if config.FuzzThreads == 0 {
+		config.FuzzThreads = 40
+	}
+	if config.HTTPTimeout == 0 {
+		config.HTTPTimeout = 10
+	}
+
+	// Validate: at least one feature must be enabled
+	if !config.EnableDNS && !config.EnableWHOIS && !config.EnableTechDetection &&
+		!config.EnablePassive && !config.EnableSubdomains && !config.EnableFuzzing {
+		fmt.Println("❌ Error: At least one feature must be enabled in custom mode")
+		fmt.Println("   Use flags like --enable-dns, --enable-whois, etc.")
+		os.Exit(1)
+	}
+
+	return config
 }
 
 var crawlCmd = &cobra.Command{
@@ -144,12 +226,10 @@ var crawlCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		
-		// Add protocol if missing
 		if !strings.HasPrefix(urlStr, "http") {
 			urlStr = "https://" + urlStr
 		}
 
-		// Create target in DB to attach results
 		db := storage.GetInstance()
 		targetObj, _ := db.CreateOrUpdateTarget(urlStr, "url")
 		
@@ -163,7 +243,6 @@ var crawlCmd = &cobra.Command{
 			TargetID:      targetObj.ID,
 		}
 
-		// Create cancellable context for graceful shutdown on CTRL+C
 		ctx, cancel := CreateCancellableContext()
 		defer cancel()
 
@@ -178,7 +257,6 @@ var crawlCmd = &cobra.Command{
 			return
 		}
 
-		// Summary
 		var emails, phones int
 		for _, r := range results {
 			emails += len(r.OSINT.Emails)
@@ -193,17 +271,6 @@ var crawlCmd = &cobra.Command{
 		
 		offerReportGeneration(urlStr)
 	},
-}
-
-func printScanModeInfo(mode string) {
-	modeInfo := map[string]string{
-		"basic":      " BASIC: DNS lookups, WHOIS, public records (fully passive)",
-		"deep":       " DEEP: Extended enumeration, subdomain discovery, tech fingerprinting (passive)",
-		"stealth":    " STEALTH: Low-profile active probing, rate-limited (may be detected)",
-		"aggressive": " AGGRESSIVE: Full active + passive scan, fast & comprehensive (will be detected)",
-	}
-	
-	fmt.Println(modeInfo[mode])
 }
 
 func offerReportGeneration(target string) {
@@ -227,7 +294,6 @@ var exportCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		
-		// Validate format
 		validFormats := []string{"json", "html", "csv", "pdf"}
 		isValid := false
 		for _, f := range validFormats {
@@ -247,7 +313,6 @@ var exportCmd = &cobra.Command{
 			fmt.Printf("Output: %s\n", output)
 		}
 		
-		// TODO: Implement export logic in Phase 2
 		fmt.Println("⚠  Export feature coming in Phase 2")
 	},
 }
@@ -286,7 +351,6 @@ Example:
 			os.Exit(1)
 		}
 
-		// Map CLI mode string to fuzzer mode enum
 		var mode fuzzer.FuzzMode
 		switch modeStr {
 		case "directory":
@@ -301,7 +365,6 @@ Example:
 		}
 
 		if wordlist == "" {
-			// Auto-select embedded lists
 			switch mode {
 			case fuzzer.ModeDirectory:
 				wordlist = "embedded:directories"
@@ -324,7 +387,6 @@ Example:
 		fmt.Printf("   Wordlist: %s\n", wordlist)
 		fmt.Printf("   Threads: %d\n", threads)
 
-		// Create cancellable context for graceful shutdown on CTRL+C
 		ctx, cancel := CreateCancellableContext()
 		defer cancel()
 
@@ -340,34 +402,62 @@ Example:
 		}
 
 		fmt.Printf("\n✨ Fuzzing Complete: Found %d items\n", len(results))
-		
-		// TODO: Save to DB (Phase 3 enhancement)
 	},
 }
 
 func init() {
+	// Scan command flags
 	scanCmd.Flags().StringP("target", "t", "", "Target domain to scan (required)")
+	scanCmd.MarkFlagRequired("target")
+	
+	// Predefined modes
 	scanCmd.Flags().BoolP("basic", "b", false, "Basic passive scan (default)")
 	scanCmd.Flags().BoolP("deep", "d", false, "Deep passive scan")
 	scanCmd.Flags().BoolP("stealth", "s", false, "Stealth active scan")
 	scanCmd.Flags().BoolP("aggressive", "a", false, "Aggressive active + passive scan")
-	scanCmd.MarkFlagRequired("target")
+	
+	// Custom mode
+	scanCmd.Flags().BoolP("custom", "c", false, "Custom configuration mode")
+	
+	// Custom mode feature toggles
+	scanCmd.Flags().Bool("enable-dns", false, "Enable DNS enumeration (custom mode)")
+	scanCmd.Flags().Bool("enable-whois", false, "Enable WHOIS lookup (custom mode)")
+	scanCmd.Flags().Bool("enable-tech", false, "Enable technology detection (custom mode)")
+	scanCmd.Flags().Bool("enable-passive", false, "Enable passive recon (custom mode)")
+	scanCmd.Flags().Bool("enable-subdomains", false, "Enable subdomain enumeration (custom mode)")
+	scanCmd.Flags().Bool("enable-fuzzing", false, "Enable fuzzing (custom mode)")
+	
+	// Custom mode performance settings
+	scanCmd.Flags().Int("subdomain-limit", 0, "Subdomain wordlist limit (0=unlimited)")
+	scanCmd.Flags().Int("subdomain-threads", 10, "Concurrent subdomain checks")
+	scanCmd.Flags().Int("fuzz-threads", 40, "Concurrent fuzzing threads")
+	scanCmd.Flags().Int("http-timeout", 10, "HTTP timeout in seconds")
+	
+	// Custom mode fuzzing settings
+	scanCmd.Flags().Bool("fuzz-directories", false, "Enable directory fuzzing")
+	scanCmd.Flags().Bool("fuzz-vhosts", false, "Enable vhost fuzzing")
+	scanCmd.Flags().String("fuzz-wordlist", "", "Custom fuzzing wordlist path")
+	
+	// Custom mode output settings
+	scanCmd.Flags().Bool("verbose", false, "Verbose output")
 	
 	// Crawl command flags
 	crawlCmd.Flags().StringP("url", "u", "", "URL to crawl (required)")
 	crawlCmd.Flags().IntP("depth", "D", 2, "Crawl depth limit")
 	crawlCmd.MarkFlagRequired("url")
 	
+	// Export command flags
 	exportCmd.Flags().StringP("target", "t", "", "Target to export data for (required)")
 	exportCmd.Flags().StringP("format", "f", "json", "Output format (json, html, csv, pdf)")
-	exportCmd.Flags().StringP("output", "o", "", "Output file path (optional, defaults to ./reports/)")
+	exportCmd.Flags().StringP("output", "o", "", "Output file path (optional)")
 	exportCmd.MarkFlagRequired("target")
 	
-	fuzzCmd.Flags().StringP("target", "t", "", "Target domain (for subdomain/vhost fuzzing)")
-	fuzzCmd.Flags().StringP("url", "u", "", "Target URL (for directory fuzzing)")
+	// Fuzz command flags
+	fuzzCmd.Flags().StringP("target", "t", "", "Target domain")
+	fuzzCmd.Flags().StringP("url", "u", "", "Target URL")
 	fuzzCmd.Flags().StringP("mode", "m", "", "Fuzzing mode: directory, vhost, subdomain (required)")
-	fuzzCmd.Flags().StringP("wordlist", "w", "", "Path to wordlist or 'embedded:name' (auto-selects if empty)")
-	fuzzCmd.Flags().IntP("threads", "T", 40, "Number of concurrent threads")
+	fuzzCmd.Flags().StringP("wordlist", "w", "", "Wordlist path or 'embedded:name'")
+	fuzzCmd.Flags().IntP("threads", "T", 40, "Concurrent threads")
 	fuzzCmd.Flags().IntP("timeout", "x", 10, "HTTP timeout in seconds")
 	fuzzCmd.Flags().IntSlice("mc", []int{200, 204, 301, 302, 307, 401, 403}, "Match HTTP status codes")
 	fuzzCmd.Flags().IntSlice("fc", []int{}, "Filter HTTP status codes")
@@ -375,7 +465,6 @@ func init() {
 	fuzzCmd.Flags().Bool("follow-redirects", false, "Follow HTTP redirects")
 	fuzzCmd.MarkFlagRequired("mode")
 
-	// Add subcommands to root
 	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd)
 }
 

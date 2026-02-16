@@ -8,13 +8,13 @@ import (
 )
 
 type WHOISResult struct {
-	Domain     string
-	Registrar  string
-	Created    string
-	Expires    string
-	Updated    string
+	Domain      string
+	Registrar   string
+	Created     string
+	Expires     string
+	Updated     string
 	NameServers []string
-	Status     []string
+	Status      []string
 }
 
 func LookupWHOIS(domain string) (*WHOISResult, error) {

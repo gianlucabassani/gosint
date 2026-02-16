@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pterm/pterm"
 )
 
 type SubdomainResult struct {
@@ -48,8 +50,6 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 	if limit > 0 && len(subdomains) > limit {
 		subdomains = subdomains[:limit]
 	}
-
-	fmt.Printf("    %s Checking %d subdomains concurrently...\n", cyan("ℹ"), len(subdomains))
 
 	// Channels and sync
 	const workers = 10
@@ -92,6 +92,8 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 							IP:         ip,
 							StatusCode: resp.StatusCode,
 						}
+						// Print finding in green as it's discovered
+						pterm.Printf("    %s %s -> %s\n", pterm.Green("▶"), pterm.Cyan(subdomain), pterm.White(ip))
 					}
 				}
 			}
@@ -114,11 +116,8 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 	var results []*SubdomainResult
 	for result := range resultChan {
 		results = append(results, result)
-		fmt.Printf("      %s Found: %s -> %s (HTTP %d)\n", green("✓"), cyan(result.Subdomain), result.IP, result.StatusCode)
 	}
 
-	fmt.Printf("    %s Checked: %d | Found: %d\n", cyan("📊"), checked, found)
-	
 	// Convert pointers to values for return
 	var finalResults []SubdomainResult
 	for _, r := range results {
@@ -126,6 +125,6 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 			finalResults = append(finalResults, *r)
 		}
 	}
-	
+
 	return finalResults, nil
 }

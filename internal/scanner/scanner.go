@@ -3,305 +3,732 @@ package scanner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/fatih/color"
 	"github.com/gianlucabassani/gosint/internal/fuzzer"
 	"github.com/gianlucabassani/gosint/internal/storage"
+	"github.com/pterm/pterm"
 )
 
+// ScanMode defines the intensity level of the scan
 type ScanMode string
 
 const (
-	ModeBasic      ScanMode = "basic"
-	ModeDeep       ScanMode = "deep"
-	ModeStealth    ScanMode = "stealth"
-	ModeAggressive ScanMode = "aggressive"
+	ModeBasic      ScanMode = "basic"      // 🟦 The Handshake - Zero intrusion
+	ModeDeep       ScanMode = "deep"       // 🟩 The Historian - Public records only
+	ModeStealth    ScanMode = "stealth"    // 🟧 The Ninja - Quiet active probing
+	ModeAggressive ScanMode = "aggressive" // 🟥 The Tank - Full enumeration
+	ModeCustom     ScanMode = "custom"     // ⚙️  User-defined configuration
 )
 
+// ScanConfig holds all customizable scan parameters
+type ScanConfig struct {
+	// Core settings
+	Mode   ScanMode
+	Target string
+
+	// Feature toggles
+	EnableDNS           bool
+	EnableWHOIS         bool
+	EnableTechDetection bool
+	EnablePassive       bool
+	EnableSubdomains    bool
+	EnableFuzzing       bool
+
+	// Performance settings
+	SubdomainLimit   int
+	SubdomainThreads int
+	FuzzThreads      int
+	HTTPTimeout      int
+	DNSTimeout       int
+
+	// Subdomain settings
+	SubdomainWordlist  string
+	SubdomainMinLength int
+	SubdomainMaxLength int
+
+	// Fuzzing settings
+	FuzzDirectories bool
+	FuzzVHosts      bool
+	FuzzWordlist    string
+	FuzzMatchCodes  []int
+
+	// Output settings
+	Verbose     bool
+	ShowProgress bool
+	SaveToDB    bool
+}
+
+// Scanner orchestrates reconnaissance operations
 type Scanner struct {
-	target        string
-	mode          ScanMode
+	config        ScanConfig
 	totalRequests int
 	db            *storage.Database
 }
 
+// ScanReport contains all scan results
 type ScanReport struct {
-	Target       string
-	Mode         string
-	DNS          *DNSResult
-	WHOIS        *WHOISResult
-	Subdomains   []SubdomainResult      // Active subdomains found
-	PassiveSubs  []string               // Passive subdomains from crt.sh, etc
-	Technologies []string
-	TotalRequests int
-	Duration     time.Duration
-	TargetID     uint
+	Target            string
+	Mode              string
+	StartTime         time.Time
+	EndTime           time.Time
+	Duration          time.Duration
+	DNS               *DNSResult
+	WHOIS             *WHOISResult
+	Technologies      []string
+	ActiveSubdomains  []SubdomainResult
+	PassiveSubdomains []string
+	PassiveURLs       []string
+	FuzzResults       []FuzzSummary
+	TotalRequests     int
+	TargetID          uint
+	Errors            []string
 }
 
-var (
-	cyan   = color.New(color.FgCyan).SprintFunc()
-	yellow = color.New(color.FgYellow).SprintFunc()
-	green  = color.New(color.FgGreen).SprintFunc()
-	red    = color.New(color.FgRed).SprintFunc()
-	blue   = color.New(color.FgBlue).SprintFunc()
-)
+// FuzzSummary aggregates fuzzing results
+type FuzzSummary struct {
+	Type    string
+	Found   int
+	Results []fuzzer.FuzzResult
+}
 
-// NewScanner creates a new scanner instance with target and mode
-func NewScanner(target string, mode ScanMode) *Scanner {
-	return &Scanner{
-		target: target,
-		mode:   mode,
-		db:     storage.GetInstance(), // Get singleton DB instance
+// NewScanner creates a scanner with the given configuration
+func NewScanner(config ScanConfig) *Scanner {
+	if config.Mode != ModeCustom {
+		config = applyModeDefaults(config)
 	}
-}
-
-func (s *Scanner) Scan(ctx context.Context) (*ScanReport, error) {
-	startTime := time.Now()
 	
-	// Create or update target in database
-	target, err := s.db.CreateOrUpdateTarget(s.target, "domain")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create target: %w", err)
+	return &Scanner{
+		config: config,
+		db:     storage.GetInstance(),
+	}
+}
+
+// NewScannerWithMode creates a scanner with a predefined mode (legacy compatibility)
+func NewScannerWithMode(target string, mode ScanMode) *Scanner {
+	config := ScanConfig{
+		Target: target,
+		Mode:   mode,
+	}
+	return NewScanner(config)
+}
+
+// applyModeDefaults sets feature flags based on scan mode
+func applyModeDefaults(config ScanConfig) ScanConfig {
+	// Base defaults
+	config.SaveToDB = true
+	config.ShowProgress = true
+	config.HTTPTimeout = 10
+	config.DNSTimeout = 5
+	config.SubdomainThreads = 10
+	config.FuzzThreads = 40
+	config.FuzzMatchCodes = []int{200, 204, 301, 302, 307, 401, 403}
+
+	switch config.Mode {
+	case ModeBasic:
+		config.EnableDNS = true
+		config.EnableWHOIS = true
+		config.EnableTechDetection = true
+		config.EnablePassive = false
+		config.EnableSubdomains = false
+		config.EnableFuzzing = false
+		config.Verbose = false
+
+	case ModeDeep:
+		config.EnableDNS = true
+		config.EnableWHOIS = true
+		config.EnableTechDetection = true
+		config.EnablePassive = true
+		config.EnableSubdomains = false
+		config.EnableFuzzing = false
+		config.Verbose = true
+
+	case ModeStealth:
+		config.EnableDNS = true
+		config.EnableWHOIS = true
+		config.EnableTechDetection = true
+		config.EnablePassive = true
+		config.EnableSubdomains = true
+		config.EnableFuzzing = false
+		config.SubdomainLimit = 50
+		config.SubdomainThreads = 5
+		config.HTTPTimeout = 15
+		config.Verbose = true
+
+	case ModeAggressive:
+		config.EnableDNS = true
+		config.EnableWHOIS = true
+		config.EnableTechDetection = true
+		config.EnablePassive = true
+		config.EnableSubdomains = true
+		config.EnableFuzzing = true
+		config.SubdomainLimit = 0
+		config.SubdomainThreads = 20
+		config.FuzzThreads = 50
+		config.FuzzDirectories = true
+		config.FuzzVHosts = false
+		config.Verbose = true
 	}
 
+	return config
+}
+
+// Scan executes the configured reconnaissance
+func (s *Scanner) Scan(ctx context.Context) (*ScanReport, error) {
 	report := &ScanReport{
-		Target:   s.target,
-		Mode:     string(s.mode),
-		TargetID: target.ID,
+		Target:    s.config.Target,
+		Mode:      string(s.config.Mode),
+		StartTime: time.Now(),
+		Errors:    []string{},
 	}
 
-	// 1. BASIC: The Foundation (DNS, Whois, Tech)
-	if err := s.runBasicScan(ctx, report); err != nil {
-		return nil, err
+	// Create or update target in database
+	if s.config.SaveToDB {
+		target, err := s.db.CreateOrUpdateTarget(s.config.Target, "domain")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create target: %w", err)
+		}
+		report.TargetID = target.ID
 	}
 
-	// 2. DEEP: External Passive Data (Cumulative for Deep, Stealth, Aggressive)
-	if s.mode != ModeBasic {
-		if err := s.runDeepScan(ctx, report); err != nil {
-			fmt.Printf("%s Deep scan warning: %v\n", yellow("⚠"), err)
+	s.printScanHeader()
+
+	// Execute scan phases based on configuration
+	if s.config.EnableDNS {
+		if err := s.runDNSPhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("DNS: %v", err))
 		}
 	}
 
-	// 3. STEALTH: Careful Active Probing
-	if s.mode == ModeStealth {
-		if err := s.runStealthScan(ctx, report); err != nil {
-			fmt.Printf("%s Stealth scan warning: %v\n", yellow("⚠"), err)
+	if s.config.EnableWHOIS {
+		if err := s.runWHOISPhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("WHOIS: %v", err))
 		}
 	}
 
-	// 4. AGGRESSIVE: Loud Active Enumeration & Fuzzing
-	if s.mode == ModeAggressive {
-		if err := s.runAggressiveScan(ctx, report); err != nil {
-			fmt.Printf("%s Aggressive scan warning: %v\n", yellow("⚠"), err)
+	if s.config.EnableTechDetection {
+		if err := s.runTechPhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Tech: %v", err))
 		}
 	}
 
+	if s.config.EnablePassive {
+		if err := s.runPassivePhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Passive: %v", err))
+		}
+	}
+
+	if s.config.EnableSubdomains {
+		if err := s.runSubdomainPhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Subdomains: %v", err))
+		}
+	}
+
+	if s.config.EnableFuzzing {
+		if err := s.runFuzzingPhase(ctx, report); err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("Fuzzing: %v", err))
+		}
+	}
+
+	// Finalize report
+	report.EndTime = time.Now()
+	report.Duration = report.EndTime.Sub(report.StartTime)
 	report.TotalRequests = s.totalRequests
-	report.Duration = time.Since(startTime)
 
-	s.saveScanSummary(report)
+	if s.config.SaveToDB {
+		s.saveScanSummary(report)
+	}
+
 	s.printSummary(report)
 
 	return report, nil
 }
 
-// BASIC: Tech Stack + DNS + WHOIS (Minimal Contact)
-func (s *Scanner) runBasicScan(ctx context.Context, report *ScanReport) error {
-	fmt.Printf("\n%s BASIC Mode: Tech stack analysis + Passive scans\n", blue("📘"))
-	fmt.Printf("%s Performing DNS queries and WHOIS lookups\n\n", cyan("ℹ"))
+// runDNSPhase performs DNS enumeration with pterm UI
+func (s *Scanner) runDNSPhase(ctx context.Context, report *ScanReport) error {
+	pterm.Println(pterm.LightCyan("⏳ Resolving DNS records..."))
 
-	// 1. DNS
-	fmt.Printf("  %s DNS enumeration\n", yellow("→"))
-	dnsResult, err := LookupDNS(s.target)
-	if err == nil {
-		report.DNS = dnsResult
-		s.totalRequests += 5
-		
-		// Detailed print
-		if len(dnsResult.A) > 0 { fmt.Printf("    %s A records: %v\n", green("✓"), dnsResult.A) }
-		if len(dnsResult.AAAA) > 0 { fmt.Printf("    %s AAAA records: %v\n", green("✓"), dnsResult.AAAA) }
-		if len(dnsResult.MX) > 0 { fmt.Printf("    %s MX records: %v\n", green("✓"), dnsResult.MX) }
-		if len(dnsResult.NS) > 0 { fmt.Printf("    %s NS records: %v\n", green("✓"), dnsResult.NS) }
-		
-		// Save DNS
-		dnsData := map[string]interface{}{"a": dnsResult.A, "mx": dnsResult.MX, "ns": dnsResult.NS, "txt": dnsResult.TXT}
-		s.db.SaveScanResult(report.TargetID, "basic", "dns", dnsData, 5)
-	} else {
-		fmt.Printf("    %s DNS lookup failed: %v\n", red("✗"), err)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 
-	// 2. WHOIS
-	fmt.Printf("\n  %s WHOIS query\n", yellow("→"))
-	whoisResult, err := LookupWHOIS(s.target)
-	if err == nil {
-		report.WHOIS = whoisResult
-		s.totalRequests++
-		if whoisResult.Registrar != "" { fmt.Printf("    %s Registrar: %s\n", green("✓"), whoisResult.Registrar) }
-		if whoisResult.Created != "" { fmt.Printf("    %s Created: %s\n", green("✓"), whoisResult.Created) }
-		if whoisResult.Expires != "" { fmt.Printf("    %s Expires: %s\n", green("✓"), whoisResult.Expires) }
-		
-		// Save WHOIS
-		whoisData := map[string]interface{}{"registrar": whoisResult.Registrar, "created": whoisResult.Created}
-		s.db.SaveScanResult(report.TargetID, "basic", "whois", whoisData, 1)
-	}
-
-	// 3. Tech Stack (Ported logic)
-	fmt.Printf("\n  %s Technology stack analysis\n", yellow("→"))
-	techRes, err := AnalyzeTech(s.target)
-	if err == nil {
-		if techRes.WebServer != "" { fmt.Printf("    %s Server: %s\n", green("✓"), techRes.WebServer) }
-		if len(techRes.Frameworks) > 0 { fmt.Printf("    %s Frameworks: %v\n", green("✓"), techRes.Frameworks) }
-		if len(techRes.JSLibraries) > 0 { fmt.Printf("    %s JS Libraries: %v\n", green("✓"), techRes.JSLibraries) }
-		
-		report.Technologies = append(report.Technologies, techRes.Frameworks...)
-		report.Technologies = append(report.Technologies, techRes.JSLibraries...)
-		s.totalRequests++
-
-		// Save Tech
-		for _, t := range report.Technologies {
-			s.db.SaveTechnology(report.TargetID, t, "", "detected")
+	dnsResult, err := LookupDNS(s.config.Target)
+	if err != nil {
+		if s.config.Verbose {
+			pterm.Println(pterm.Red("  ✗ DNS lookup failed"))
 		}
-	} else {
-		fmt.Printf("    %s Tech analysis failed: %v\n", red("✗"), err)
+		return err
+	}
+
+	report.DNS = dnsResult
+	s.totalRequests += 5
+
+	// Display results clean like Browsint
+	if s.config.Verbose && dnsResult != nil {
+		pterm.Println()
+		pterm.Println(pterm.LightCyan("┏━━━━━━━━━━━━━━━━━━━ DNS RECORDS ━━━━━━━━━━━━━━━━━━━┓"))
+		
+		if len(dnsResult.A) > 0 {
+			pterm.Printf("  ┌─ Record A:\n")
+			for _, record := range dnsResult.A {
+				pterm.Printf("  │  └─ %s\n", pterm.Green(record))
+			}
+		}
+		
+		if len(dnsResult.MX) > 0 {
+			pterm.Printf("  ┌─ Record MX:\n")
+			for _, record := range dnsResult.MX {
+				pterm.Printf("  │  └─ %s\n", pterm.Green(record))
+			}
+		}
+		
+		if len(dnsResult.NS) > 0 {
+			pterm.Printf("  ┌─ Record NS:\n")
+			for _, record := range dnsResult.NS {
+				pterm.Printf("  │  └─ %s\n", pterm.Green(record))
+			}
+		}
+		
+		if len(dnsResult.TXT) > 0 {
+			pterm.Printf("  ┌─ Record TXT:\n")
+			for _, record := range dnsResult.TXT {
+				pterm.Printf("  │  └─ %s\n", pterm.Green(record))
+			}
+		}
+		
+		pterm.Println(pterm.LightCyan("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"))
+	}
+
+	if s.config.SaveToDB {
+		dnsData := map[string]interface{}{
+			"a":    dnsResult.A,
+			"aaaa": dnsResult.AAAA,
+			"mx":   dnsResult.MX,
+			"ns":   dnsResult.NS,
+			"txt":  dnsResult.TXT,
+		}
+		s.db.SaveScanResult(report.TargetID, string(s.config.Mode), "dns", dnsData, 5)
 	}
 
 	return nil
 }
 
-// DEEP: External Passive Resources (No direct probing)
-func (s *Scanner) runDeepScan(ctx context.Context, report *ScanReport) error {
-	fmt.Printf("\n%s DEEP Mode: Passive external resource queries\n", blue("📗"))
-	fmt.Printf("%s Querying Certificate Transparency and Archive data\n\n", cyan("ℹ"))
+// runWHOISPhase performs WHOIS lookup with pterm UI
+func (s *Scanner) runWHOISPhase(ctx context.Context, report *ScanReport) error {
+	pterm.Println(pterm.LightCyan("⏳ Querying WHOIS database..."))
 
-	fmt.Printf("  %s Querying external resources\n", yellow("→"))
-	passiveRes, err := RunPassiveRecon(s.target)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	whoisResult, err := LookupWHOIS(s.config.Target)
+	if err != nil {
+		if s.config.Verbose {
+			pterm.Println(pterm.Red("  ✗ WHOIS lookup failed"))
+		}
+		return err
+	}
+
+	report.WHOIS = whoisResult
+	s.totalRequests++
+
+	if s.config.Verbose && whoisResult != nil {
+		pterm.Println()
+		pterm.Println(pterm.LightCyan("┏━━━━━━━━━━━━━━━━━ WHOIS DATA ━━━━━━━━━━━━━━━━━┓"))
+		
+		if whoisResult.Registrar != "" {
+			pterm.Printf("  ┌─ Registrar:  %s\n", pterm.Green(whoisResult.Registrar))
+		}
+		if whoisResult.Created != "" {
+			pterm.Printf("  ├─ Created:    %s\n", pterm.White(whoisResult.Created))
+		}
+		if whoisResult.Expires != "" {
+			pterm.Printf("  └─ Expires:    %s\n", pterm.White(whoisResult.Expires))
+		}
+		
+		pterm.Println(pterm.LightCyan("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"))
+	}
+
+	if s.config.SaveToDB {
+		whoisData := map[string]interface{}{
+			"registrar": whoisResult.Registrar,
+			"created":   whoisResult.Created,
+			"expires":   whoisResult.Expires,
+		}
+		s.db.SaveScanResult(report.TargetID, string(s.config.Mode), "whois", whoisData, 1)
+	}
+
+	return nil
+}
+
+// runTechPhase performs technology detection with pterm UI
+func (s *Scanner) runTechPhase(ctx context.Context, report *ScanReport) error {
+	pterm.Println(pterm.LightCyan("⏳ Analyzing technology stack..."))
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	techResult, err := AnalyzeTech(s.config.Target)
 	if err != nil {
 		return err
 	}
 
-	// Handle results
-	if len(passiveRes.Subdomains) > 0 {
-		fmt.Printf("    %s crt.sh found %d subdomains\n", green("✓"), len(passiveRes.Subdomains))
-		// Save to DB
-		for _, sub := range passiveRes.Subdomains {
-			s.db.SaveSubdomain(report.TargetID, sub, "", "passive_crt")
-		}
-	} else {
-		fmt.Printf("    %s No subdomains found in crt.sh\n", yellow("⚠"))
-	}
+	s.totalRequests++
 
-	if len(passiveRes.URLs) > 0 {
-		fmt.Printf("    %s Wayback found %d URLs\n", green("✓"), len(passiveRes.URLs))
-	} else {
-		fmt.Printf("    %s No archived URLs found\n", yellow("⚠"))
-	}
-	s.totalRequests += 2
-	
-	return nil
-}
-
-// STEALTH: Slow Active Enumeration (Small wordlist)
-func (s *Scanner) runStealthScan(ctx context.Context, report *ScanReport) error {
-	fmt.Printf("\n%s STEALTH Mode: Slow active enumeration (low-hanging fruit)\n", blue("📙"))
-	fmt.Printf("%s Active subdomain enumeration with reduced aggressiveness\n\n", cyan("ℹ"))
-
-	fmt.Printf("  %s Active Subdomain Enumeration (Wordlist)\n", yellow("→"))
-	fmt.Printf("    %s Using reduced wordlist for stealth (first 50 entries)\n", cyan("ℹ"))
-	
-	// Use small limit (50) for stealth
-	subdomains, err := EnumerateSubdomains(s.target, 50)
-	if err == nil {
-		report.Subdomains = subdomains
-		s.totalRequests += len(subdomains)
+	// Build technology list
+	if s.config.Verbose && techResult != nil {
+		pterm.Println()
+		pterm.Println(pterm.LightCyan("┏━━━━━━━━━━━━ TECHNOLOGIES & CONFIGURATION ━━━━━━━━━━━━┓"))
 		
-		if len(subdomains) > 0 {
-			fmt.Printf("    %s Found %d subdomains\n", green("✓"), len(subdomains))
-			for _, sub := range subdomains {
-				s.db.SaveSubdomain(report.TargetID, sub.Subdomain, sub.IP, "active_stealth")
-			}
-		} else {
-			fmt.Printf("    %s No subdomains found active\n", yellow("⚠"))
+		if techResult.WebServer != "" {
+			pterm.Printf("  ┌─ Web Server: %s\n", pterm.Green(techResult.WebServer))
+		}
+		
+		if len(techResult.Frameworks) > 0 {
+			pterm.Printf("  ├─ CMS / Framework: %s\n", pterm.Green(strings.Join(techResult.Frameworks, ", ")))
+		}
+		
+		if len(techResult.JSLibraries) > 0 {
+			pterm.Printf("  ├─ JavaScript Libraries: %s\n", pterm.Green(strings.Join(techResult.JSLibraries, ", ")))
+		}
+		
+		if len(techResult.Analytics) > 0 {
+			pterm.Printf("  └─ Analytics: %s\n", pterm.Green(strings.Join(techResult.Analytics, ", ")))
+		}
+		
+		pterm.Println(pterm.LightCyan("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"))
+	}
+
+	report.Technologies = append(report.Technologies, techResult.Frameworks...)
+	report.Technologies = append(report.Technologies, techResult.JSLibraries...)
+
+	if s.config.SaveToDB {
+		for _, t := range report.Technologies {
+			s.db.SaveTechnology(report.TargetID, t, "", "detected")
 		}
 	}
-	
+
 	return nil
 }
 
-// AGGRESSIVE: Full Active + Fuzzing
-func (s *Scanner) runAggressiveScan(ctx context.Context, report *ScanReport) error {
-	fmt.Printf("\n%s AGGRESSIVE Mode: Full active scan + Fuzzing\n", blue("📕"))
-	fmt.Printf("%s This mode will make significant noise\n\n", cyan("ℹ"))
+// runPassivePhase queries external passive sources
+func (s *Scanner) runPassivePhase(ctx context.Context, report *ScanReport) error {
+	pterm.Println(pterm.LightCyan("⏳ Starting passive reconnaissance (crt.sh, Wayback Machine)"))
 
-	// 1. Full Subdomain Scan
-	fmt.Printf("  %s Full Subdomain Enumeration (Large List)\n", yellow("→"))
-	subdomains, _ := EnumerateSubdomains(s.target, 1000) 
-	report.Subdomains = append(report.Subdomains, subdomains...)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	// The passive module now handles its own parallel execution
+	passiveResult, err := RunPassiveRecon(s.config.Target)
+	if err != nil {
+		return err
+	}
+
+	s.totalRequests += 2
+
+	pterm.Println()
+	pterm.Println(pterm.LightCyan("┏━━━━━━━━━━━━━━━ PASSIVE INTELLIGENCE ━━━━━━━━━━━━━━┓"))
+
+	if len(passiveResult.Subdomains) > 0 {
+		report.PassiveSubdomains = passiveResult.Subdomains
+		pterm.Printf("  ▶ Subdomains (crt.sh): %s\n", pterm.Green(fmt.Sprintf("%d found", len(passiveResult.Subdomains))))
+		
+		if s.config.SaveToDB {
+			for _, sub := range passiveResult.Subdomains {
+				s.db.SaveSubdomain(report.TargetID, sub, "", "passive_crt")
+			}
+		}
+	} else {
+		pterm.Printf("  ▶ Subdomains (crt.sh): %s\n", pterm.White("None"))
+	}
+
+	if len(passiveResult.URLs) > 0 {
+		report.PassiveURLs = passiveResult.URLs
+		pterm.Printf("  ▶ Archived URLs (Wayback): %s\n", pterm.Green(fmt.Sprintf("%d found", len(passiveResult.URLs))))
+	} else {
+		pterm.Printf("  ▶ Archived URLs (Wayback): %s\n", pterm.White("None"))
+	}
+
+	pterm.Println(pterm.LightCyan("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"))
+
+	return nil
+}
+
+// runSubdomainPhase performs active subdomain enumeration with progress bar
+func (s *Scanner) runSubdomainPhase(ctx context.Context, report *ScanReport) error {
+	pterm.Println(pterm.LightCyan("⏳ Starting active subdomain enumeration"))
+	
+	if s.config.SubdomainLimit > 0 {
+		pterm.Printf("  └─ Limited to %d wordlist entries\n", s.config.SubdomainLimit)
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	subdomains, err := EnumerateSubdomains(s.config.Target, s.config.SubdomainLimit)
+	if err != nil {
+		return err
+	}
+
+	report.ActiveSubdomains = subdomains
 	s.totalRequests += len(subdomains)
-	
-	for _, sub := range subdomains {
-		s.db.SaveSubdomain(report.TargetID, sub.Subdomain, sub.IP, "active_aggressive")
+
+	pterm.Println()
+	if len(subdomains) > 0 {
+		pterm.Printf("  %s %d active subdomains\n", pterm.Green("▶"), len(subdomains))
+	} else {
+		pterm.Println(pterm.White("  ▶ No active subdomains found"))
 	}
 
-	// 2. Directory Fuzzing
-	fmt.Printf("\n  %s Directory Fuzzing\n", yellow("→"))
-	
-	fuzzConfig := fuzzer.FuzzerConfig{
-		Target:      "https://" + s.target,
-		Mode:        fuzzer.ModeDirectory,
-		Wordlist:    "embedded:directories",
-		Threads:     50, 
-		Timeout:     5,
-		MatchCodes:  []int{200, 301, 302, 403},
+	if s.config.SaveToDB {
+		for _, sub := range subdomains {
+			s.db.SaveSubdomain(report.TargetID, sub.Subdomain, sub.IP, "active")
+		}
 	}
-	
+
+	return nil
+}
+
+// runFuzzingPhase performs directory and vhost fuzzing
+func (s *Scanner) runFuzzingPhase(ctx context.Context, report *ScanReport) error {
+	pterm.Info.Println("Starting fuzzing phase")
+
+	if s.config.FuzzDirectories {
+		if err := s.runDirectoryFuzzing(ctx, report); err != nil {
+			return err
+		}
+	}
+
+	if s.config.FuzzVHosts {
+		if err := s.runVHostFuzzing(ctx, report); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// runDirectoryFuzzing fuzzes web directories
+func (s *Scanner) runDirectoryFuzzing(ctx context.Context, report *ScanReport) error {
+	wordlist := s.config.FuzzWordlist
+	if wordlist == "" {
+		wordlist = "embedded:directories"
+	}
+
+	fuzzConfig := fuzzer.FuzzerConfig{
+		Target:     "https://" + s.config.Target,
+		Mode:       fuzzer.ModeDirectory,
+		Wordlist:   wordlist,
+		Threads:    s.config.FuzzThreads,
+		Timeout:    s.config.HTTPTimeout,
+		MatchCodes: s.config.FuzzMatchCodes,
+	}
+
 	f := fuzzer.NewFuzzer(fuzzConfig)
 	results, err := f.Start(ctx)
-	if err == nil {
-		fmt.Printf("    %s Fuzzer found %d paths\n", green("✓"), len(results))
-		for _, res := range results {
-			s.db.SaveFuzzResult(report.TargetID, "directory", res.URL, res.StatusCode, res.Size, res.WordUsed)
+	if err != nil {
+		return err
+	}
+
+	if len(results) > 0 {
+		report.FuzzResults = append(report.FuzzResults, FuzzSummary{
+			Type:    "directory",
+			Found:   len(results),
+			Results: results,
+		})
+
+		pterm.Success.Printf("Directory fuzzing: %d paths found\n", len(results))
+
+		if s.config.SaveToDB {
+			for _, res := range results {
+				s.db.SaveFuzzResult(report.TargetID, "directory", res.URL, res.StatusCode, res.Size, res.WordUsed)
+			}
 		}
 	}
 
 	return nil
 }
 
+// runVHostFuzzing fuzzes virtual hosts
+func (s *Scanner) runVHostFuzzing(ctx context.Context, report *ScanReport) error {
+	wordlist := s.config.FuzzWordlist
+	if wordlist == "" {
+		wordlist = "embedded:vhosts"
+	}
+
+	fuzzConfig := fuzzer.FuzzerConfig{
+		Target:     s.config.Target,
+		Mode:       fuzzer.ModeVHost,
+		Wordlist:   wordlist,
+		Threads:    s.config.FuzzThreads,
+		Timeout:    s.config.HTTPTimeout,
+		MatchCodes: s.config.FuzzMatchCodes,
+	}
+
+	f := fuzzer.NewFuzzer(fuzzConfig)
+	results, err := f.Start(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(results) > 0 {
+		report.FuzzResults = append(report.FuzzResults, FuzzSummary{
+			Type:    "vhost",
+			Found:   len(results),
+			Results: results,
+		})
+
+		pterm.Success.Printf("VHost fuzzing: %d hosts found\n", len(results))
+
+		if s.config.SaveToDB {
+			for _, res := range results {
+				s.db.SaveFuzzResult(report.TargetID, "vhost", res.URL, res.StatusCode, res.Size, res.WordUsed)
+			}
+		}
+	}
+
+	return nil
+}
+
+// printScanHeader displays the scan configuration
+func (s *Scanner) printScanHeader() {
+	// Mode descriptions
+	modeDesc := map[ScanMode]string{
+		ModeBasic:      "🟦 The Handshake - Zero intrusion (DNS, WHOIS, Tech)",
+		ModeDeep:       "🟩 The Historian - Public records only (crt.sh, Wayback)",
+		ModeStealth:    "🟧 The Ninja - Quiet active probing (rate-limited)",
+		ModeAggressive: "🟥 The Tank - Full enumeration (high noise)",
+		ModeCustom:     "⚙️  Custom Configuration",
+	}
+
+	pterm.Println()
+	pterm.Println(pterm.LightCyan("╔════════════════════════════════════════════════════════╗"))
+	pterm.Println(pterm.LightCyan("║") + pterm.Bold.Sprint("          🔍 DOMAIN RECONNAISSANCE SCAN            ") + pterm.LightCyan("║"))
+	pterm.Println(pterm.LightCyan("╚════════════════════════════════════════════════════════╝"))
+	pterm.Println()
+	pterm.Printf("┌─ Target:      %s\n", pterm.Cyan(s.config.Target))
+	pterm.Printf("├─ Mode:        %s\n", pterm.Yellow(s.config.Mode))
+	pterm.Printf("└─ Description: %s\n", pterm.White(modeDesc[s.config.Mode]))
+	pterm.Println()
+	
+	// Display enabled features
+	features := []string{}
+	if s.config.EnableDNS {
+		features = append(features, "DNS")
+	}
+	if s.config.EnableWHOIS {
+		features = append(features, "WHOIS")
+	}
+	if s.config.EnableTechDetection {
+		features = append(features, "Tech")
+	}
+	if s.config.EnablePassive {
+		features = append(features, "Passive")
+	}
+	if s.config.EnableSubdomains {
+		features = append(features, "Subdomains")
+	}
+	if s.config.EnableFuzzing {
+		features = append(features, "Fuzzing")
+	}
+	
+	pterm.Printf("  ▶ Enabled modules: %s\n", pterm.LightGreen(strings.Join(features, ", ")))
+	pterm.Println()
+}
+
+// saveScanSummary saves the scan report to database
 func (s *Scanner) saveScanSummary(report *ScanReport) {
 	summaryData := map[string]interface{}{
-		"mode":           report.Mode,
-		"duration":       report.Duration.String(),
-		"active_subs":    len(report.Subdomains),
-		"technologies":   len(report.Technologies),
+		"mode":               report.Mode,
+		"duration":           report.Duration.String(),
+		"active_subdomains":  len(report.ActiveSubdomains),
+		"passive_subdomains": len(report.PassiveSubdomains),
+		"technologies":       len(report.Technologies),
+		"fuzz_results":       len(report.FuzzResults),
+		"errors":             len(report.Errors),
 	}
-	s.db.SaveScanResult(report.TargetID, string(s.mode), "summary", summaryData, report.TotalRequests)
+	s.db.SaveScanResult(report.TargetID, string(s.config.Mode), "summary", summaryData, report.TotalRequests)
 }
 
+// printSummary displays the scan results using pterm
 func (s *Scanner) printSummary(report *ScanReport) {
-	fmt.Printf("\n%s\n", blue("═══════════════════════════════════════════════════"))
-	fmt.Printf("%s SCAN COMPLETE\n", blue("█"))
-	fmt.Printf("%s\n", blue("═══════════════════════════════════════════════════"))
-	fmt.Printf("  Target: %s\n", cyan(report.Target))
-	fmt.Printf("  Mode: %s\n", yellow(report.Mode))
-	fmt.Printf("  Duration: %s\n", report.Duration.Round(time.Millisecond))
-	fmt.Printf("  Total Requests: %d\n", report.TotalRequests)
-	fmt.Println()
-	fmt.Printf("  %s DNS Records: %s\n", green("✓"), getBoolIcon(report.DNS != nil))
-	fmt.Printf("  %s WHOIS Data: %s\n", green("✓"), getBoolIcon(report.WHOIS != nil))
-	fmt.Printf("  %s Technologies Detected: %d\n", green("✓"), len(report.Technologies))
-	fmt.Printf("  %s Active Subdomains: %d\n", green("✓"), len(report.Subdomains))
-	fmt.Printf("  %s Passive Subdomains: %d\n", green("✓"), len(report.PassiveSubs))
-	fmt.Printf("%s\n\n", blue("═══════════════════════════════════════════════════"))
+	pterm.Println()
+	pterm.Println(pterm.LightCyan("╔════════════════════════════════════════════════════════╗"))
+	pterm.Println(pterm.LightCyan("║") + pterm.Bold.Sprint("                  SCAN COMPLETE                     ") + pterm.LightCyan("║"))
+	pterm.Println(pterm.LightCyan("╚════════════════════════════════════════════════════════╝"))
+	pterm.Println()
 
-	// Offer report generation
-	fmt.Printf("%s Scan data saved to database (Target ID: %d)\n", green("✓"), report.TargetID)
-	fmt.Printf("%s Generate report: %s\n", cyan("ℹ"), yellow("gosint export -t "+report.Target+" -f json"))
-	fmt.Println()
-}
+	// Summary info
+	pterm.Printf("┌─ Target:          %s\n", pterm.Cyan(report.Target))
+	pterm.Printf("├─ Mode:            %s\n", pterm.Yellow(report.Mode))
+	pterm.Printf("├─ Duration:        %s\n", pterm.White(report.Duration.Round(time.Millisecond).String()))
+	pterm.Printf("└─ Total Requests:  %s\n", pterm.White(fmt.Sprintf("%d", report.TotalRequests)))
+	pterm.Println()
 
-func getBoolIcon(value bool) string {
-	if value {
-		return green("Yes")
+	// Results summary
+	pterm.Println(pterm.LightCyan("┏━━━━━━━━━━━━━━ SCAN RESULTS SUMMARY ━━━━━━━━━━━━━━┓"))
+	
+	if report.DNS != nil {
+		pterm.Printf("  ▶ DNS Records:         %s\n", pterm.Green(fmt.Sprintf("%d", len(report.DNS.A)+len(report.DNS.MX)+len(report.DNS.NS))))
 	}
-	return red("No")
+	
+	if report.WHOIS != nil {
+		pterm.Printf("  ▶ WHOIS Data:          %s\n", pterm.Green("Available"))
+	}
+	
+	if len(report.Technologies) > 0 {
+		pterm.Printf("  ▶ Technologies:        %s\n", pterm.Green(fmt.Sprintf("%d detected", len(report.Technologies))))
+	}
+	
+	if len(report.ActiveSubdomains) > 0 {
+		pterm.Printf("  ▶ Active Subdomains:   %s\n", pterm.Green(fmt.Sprintf("%d", len(report.ActiveSubdomains))))
+	}
+	
+	if len(report.PassiveSubdomains) > 0 {
+		pterm.Printf("  ▶ Passive Subdomains:  %s\n", pterm.Green(fmt.Sprintf("%d", len(report.PassiveSubdomains))))
+	}
+	
+	if len(report.PassiveURLs) > 0 {
+		pterm.Printf("  ▶ Archived URLs:       %s\n", pterm.Green(fmt.Sprintf("%d", len(report.PassiveURLs))))
+	}
+	
+	for _, fuzz := range report.FuzzResults {
+		pterm.Printf("  ▶ Fuzzing (%s):      %s\n", fuzz.Type, pterm.Green(fmt.Sprintf("%d paths", fuzz.Found)))
+	}
+	
+	pterm.Println(pterm.LightCyan("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"))
+
+	// Errors section
+	if len(report.Errors) > 0 {
+		pterm.Println()
+		pterm.Println(pterm.Yellow("⚠  Encountered errors during scan:"))
+		for _, err := range report.Errors {
+			pterm.Printf("    • %s\n", pterm.White(err))
+		}
+	}
+
+	// Database save confirmation
+	if s.config.SaveToDB {
+		pterm.Println()
+		pterm.Printf("  %s Data saved to database (Target ID: %d)\n", pterm.Green("✓"), report.TargetID)
+		pterm.Printf("  %s Export: gosint export -t %s -f [json|html|csv|pdf]\n", pterm.White("ℹ"), report.Target)
+	}
+	
+	pterm.Println()
+	pterm.Println(pterm.LightCyan("╚════════════════════════════════════════════════════════╝"))
+	pterm.Println()
 }
