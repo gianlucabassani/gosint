@@ -1,7 +1,7 @@
 package crawler
 
 import (
-	"context"
+	"context" // needed for cancellation and timeouts
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +32,7 @@ type CrawlResult struct {
 
 type Crawler struct {
 	config  CrawlerConfig
-	visited sync.Map
+	visited sync.Map 
 	db      *storage.Database
 	client  *http.Client
 }
@@ -57,12 +57,12 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 	fmt.Printf(" :: Max Threads      : %d\n", c.config.MaxConcurrent)
 	fmt.Printf("%s\n\n", color.BlueString("════════════════════════════════════════════════════════════"))
 
-	resultsChan := make(chan CrawlResult)
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, c.config.MaxConcurrent)
+	resultsChan := make(chan CrawlResult) // channel (which is a goroutine-safe queue) to collect results from workers
+	var wg sync.WaitGroup // limit concurrency with WaitGroup + buffered channel
+	sem := make(chan struct{}, c.config.MaxConcurrent) // semaphore pattern to limit concurrent goroutines
 
 	// Start crawling
-	wg.Add(1)
+	wg.Add(1) // add initial task for the root URL
 	go c.crawl(ctx, c.config.TargetURL, baseURL.Host, 0, &wg, sem, resultsChan)
 
 	// Monitor & Close
@@ -83,11 +83,11 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 }
 
 func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, depth int, wg *sync.WaitGroup, sem chan struct{}, results chan<- CrawlResult) {
-	defer wg.Done()
+	defer wg.Done() 
 
 	// Check if context is cancelled
-	select {
-	case <-ctx.Done():
+	select { 
+	case <-ctx.Done(): // return a channel that is closed when this context is cancelled / times out
 		return
 	default:
 	}
@@ -95,7 +95,7 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 	if depth > c.config.MaxDepth {
 		return
 	}
-	if _, loaded := c.visited.LoadOrStore(target, true); loaded {
+	if _, loaded := c.visited.LoadOrStore(target, true); loaded { // check if URL has already been visited (thread-safe)
 		return
 	}
 
@@ -122,7 +122,7 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 	}
 	body := string(bodyBytes)
 
-	// Extract
+	// Extract data
 	osintData := ExtractOSINT(body)
 	links := extractLinks(body, target)
 	title := extractTitle(body)
@@ -148,7 +148,7 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 
 	// Recurse
 	for _, link := range links {
-		u, err := url.Parse(link)
+		u, err := url.Parse(link) // check the base domain of the link to ensure we stay within scope
 		if err == nil && u.Host == scopeHost {
 			wg.Add(1)
 			go c.crawl(ctx, link, scopeHost, depth+1, wg, sem, results)
