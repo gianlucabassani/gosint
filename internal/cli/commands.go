@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gianlucabassani/gosint/internal/crawler"
 	"github.com/gianlucabassani/gosint/internal/fuzzer"
+	"github.com/gianlucabassani/gosint/internal/reports"
 	"github.com/gianlucabassani/gosint/internal/scanner"
 	"github.com/gianlucabassani/gosint/internal/storage"
 	"github.com/spf13/cobra"
@@ -19,16 +21,16 @@ import (
 // CreateCancellableContext creates a context that cancels on CTRL+C signal
 func CreateCancellableContext() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	opSigChan := make(chan os.Signal, 1)
 	signal.Notify(opSigChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	go func() {
 		<-opSigChan
 		fmt.Printf("\n\n⚠️  Received interrupt signal, stopping operation...\n\n")
 		cancel()
 	}()
-	
+
 	return ctx, cancel
 }
 
@@ -97,9 +99,9 @@ Examples:
 
 		// Check if custom mode
 		custom, _ := cmd.Flags().GetBool("custom")
-		
+
 		var config scanner.ScanConfig
-		
+
 		if custom {
 			// Build custom configuration from flags
 			config = buildCustomConfig(cmd, target)
@@ -139,10 +141,18 @@ func getSelectedMode(cmd *cobra.Command) scanner.ScanMode {
 	aggressive, _ := cmd.Flags().GetBool("aggressive")
 
 	modeCount := 0
-	if basic { modeCount++ }
-	if deep { modeCount++ }
-	if stealth { modeCount++ }
-	if aggressive { modeCount++ }
+	if basic {
+		modeCount++
+	}
+	if deep {
+		modeCount++
+	}
+	if stealth {
+		modeCount++
+	}
+	if aggressive {
+		modeCount++
+	}
 
 	if modeCount > 1 {
 		fmt.Println("❌ Error: Only one scan mode can be selected at a time")
@@ -220,19 +230,19 @@ var crawlCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		urlStr, _ := cmd.Flags().GetString("url")
 		depth, _ := cmd.Flags().GetInt("depth")
-		
+
 		if urlStr == "" {
 			fmt.Println("❌ Error: --url/-u flag is required")
 			os.Exit(1)
 		}
-		
+
 		if !strings.HasPrefix(urlStr, "http") {
 			urlStr = "https://" + urlStr
 		}
 
 		db := storage.GetInstance()
 		targetObj, _ := db.CreateOrUpdateTarget(urlStr, "url")
-		
+
 		fmt.Printf("🕷️  Starting OSINT Crawl: %s (Depth: %d)\n", urlStr, depth)
 
 		config := crawler.CrawlerConfig{
@@ -268,7 +278,7 @@ var crawlCmd = &cobra.Command{
 		fmt.Printf("   Emails Found:  %d\n", emails)
 		fmt.Printf("   Phones Found:  %d\n", phones)
 		fmt.Printf("   Data saved to database for target ID: %d\n", targetObj.ID)
-		
+
 		offerReportGeneration(urlStr)
 	},
 }
@@ -278,6 +288,7 @@ func offerReportGeneration(target string) {
 	fmt.Println("📊 Scan completed! Generate report?")
 	fmt.Println("Available formats: JSON, HTML, CSV, PDF")
 	fmt.Println("Run: gosint export --target " + target + " --format [json|html|csv|pdf]")
+	fmt.Println("Or use the interactive menu to generate reports.")
 	fmt.Println(strings.Repeat("─", 50))
 }
 
@@ -288,12 +299,12 @@ var exportCmd = &cobra.Command{
 		target, _ := cmd.Flags().GetString("target")
 		format, _ := cmd.Flags().GetString("format")
 		output, _ := cmd.Flags().GetString("output")
-		
+
 		if target == "" {
 			fmt.Println("❌ Error: --target flag is required")
 			os.Exit(1)
 		}
-		
+
 		validFormats := []string{"json", "html", "csv", "pdf"}
 		isValid := false
 		for _, f := range validFormats {
@@ -302,19 +313,75 @@ var exportCmd = &cobra.Command{
 				break
 			}
 		}
-		
+
 		if !isValid {
 			fmt.Printf("❌ Error: Invalid format '%s'. Choose: json, html, csv, pdf\n", format)
 			os.Exit(1)
 		}
-		
-		fmt.Printf("Exporting %s report for %s\n", format, target)
-		if output != "" {
-			fmt.Printf("Output: %s\n", output)
+
+		if err := ExecuteExport(target, format, output); err != nil {
+			fmt.Printf("❌ Error: %v\n", err)
+			os.Exit(1)
 		}
-		
-		fmt.Println("⚠  Export feature coming in Phase 2")
 	},
+}
+
+// ExecuteExport handles the report generation logic
+func ExecuteExport(target, format, output string) error {
+	fmt.Printf("Exporting %s report for %s\n", format, target)
+
+	// Prepare output directory and filename
+	if output == "" {
+		// Create data/<target> directory
+		dataDir := "data"
+		targetDir := filepath.Join(dataDir, target)
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return fmt.Errorf("creating directory %s: %w", targetDir, err)
+		}
+
+		timestamp := time.Now().Format("20060102_150405")
+		filename := fmt.Sprintf("report_%s_%s.%s", target, timestamp, format)
+		output = filepath.Join(targetDir, filename)
+	}
+
+	fmt.Printf("Output: %s\n", output)
+
+	db := storage.GetInstance()
+	targetObj, err := db.GetTargetReportData(target)
+	if err != nil {
+		return fmt.Errorf("fetching data: %w", err)
+	}
+
+	// Prepare report data
+	reportData := reports.ReportData{
+		Target:    targetObj.Domain,
+		ScanDate:  targetObj.LastScanned,
+		ScanMode:  "Unknown", // We might want to store the last scan mode in Target or infer it
+		TargetObj: targetObj,
+		// Map specific fields
+		Technologies: targetObj.Technologies,
+		Subdomains:   targetObj.Subdomains,
+		Fuzzing:      targetObj.FuzzResults,
+	}
+
+	// Filter ScanResults into specific categories if needed
+	for _, sr := range targetObj.ScanResults {
+		if sr.Type == "dns" {
+			reportData.DNS = append(reportData.DNS, sr)
+		} else if sr.Type == "whois" {
+			reportData.WHOIS = sr
+		}
+	}
+
+	// Calculate total duration if available, else placeholder
+	reportData.Duration = "N/A"
+
+	if err := reports.GenerateReport(format, output, reportData); err != nil {
+		return fmt.Errorf("generating report: %w", err)
+	}
+
+	fmt.Printf("✅ Report generated successfully: %s\n", output)
+	return nil
 }
 
 var fuzzCmd = &cobra.Command{
@@ -409,16 +476,16 @@ func init() {
 	// Scan command flags
 	scanCmd.Flags().StringP("target", "t", "", "Target domain to scan (required)")
 	scanCmd.MarkFlagRequired("target")
-	
+
 	// Predefined modes
 	scanCmd.Flags().BoolP("basic", "b", false, "Basic passive scan (default)")
 	scanCmd.Flags().BoolP("deep", "d", false, "Deep passive scan")
 	scanCmd.Flags().BoolP("stealth", "s", false, "Stealth active scan")
 	scanCmd.Flags().BoolP("aggressive", "a", false, "Aggressive active + passive scan")
-	
+
 	// Custom mode
 	scanCmd.Flags().BoolP("custom", "c", false, "Custom configuration mode")
-	
+
 	// Custom mode feature toggles
 	scanCmd.Flags().Bool("enable-dns", false, "Enable DNS enumeration (custom mode)")
 	scanCmd.Flags().Bool("enable-whois", false, "Enable WHOIS lookup (custom mode)")
@@ -426,32 +493,32 @@ func init() {
 	scanCmd.Flags().Bool("enable-passive", false, "Enable passive recon (custom mode)")
 	scanCmd.Flags().Bool("enable-subdomains", false, "Enable subdomain enumeration (custom mode)")
 	scanCmd.Flags().Bool("enable-fuzzing", false, "Enable fuzzing (custom mode)")
-	
+
 	// Custom mode performance settings
 	scanCmd.Flags().Int("subdomain-limit", 0, "Subdomain wordlist limit (0=unlimited)")
 	scanCmd.Flags().Int("subdomain-threads", 10, "Concurrent subdomain checks")
 	scanCmd.Flags().Int("fuzz-threads", 40, "Concurrent fuzzing threads")
 	scanCmd.Flags().Int("http-timeout", 10, "HTTP timeout in seconds")
-	
+
 	// Custom mode fuzzing settings
 	scanCmd.Flags().Bool("fuzz-directories", false, "Enable directory fuzzing")
 	scanCmd.Flags().Bool("fuzz-vhosts", false, "Enable vhost fuzzing")
 	scanCmd.Flags().String("fuzz-wordlist", "", "Custom fuzzing wordlist path")
-	
+
 	// Custom mode output settings
 	scanCmd.Flags().Bool("verbose", false, "Verbose output")
-	
+
 	// Crawl command flags
 	crawlCmd.Flags().StringP("url", "u", "", "URL to crawl (required)")
 	crawlCmd.Flags().IntP("depth", "D", 2, "Crawl depth limit")
 	crawlCmd.MarkFlagRequired("url")
-	
+
 	// Export command flags
 	exportCmd.Flags().StringP("target", "t", "", "Target to export data for (required)")
 	exportCmd.Flags().StringP("format", "f", "json", "Output format (json, html, csv, pdf)")
 	exportCmd.Flags().StringP("output", "o", "", "Output file path (optional)")
 	exportCmd.MarkFlagRequired("target")
-	
+
 	// Fuzz command flags
 	fuzzCmd.Flags().StringP("target", "t", "", "Target domain")
 	fuzzCmd.Flags().StringP("url", "u", "", "Target URL")

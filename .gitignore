@@ -31,6 +31,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+data/*
 
 # Logs
 *.log
@@ -38,3 +39,4 @@ Thumbs.db
 # Temp
 tmp/
 temp/
+

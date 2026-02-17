@@ -6,21 +6,23 @@ import (
 
 // Target represents a scanned domain/IP
 type Target struct {
-	ID          uint      `gorm:"primaryKey"`
-	Domain      string    `gorm:"uniqueIndex;not null"`
-	Type        string    `gorm:"default:'domain'"` // domain, ip, url
-	CreatedAt   time.Time
-	LastScanned time.Time
-	ScanResults []ScanResult `gorm:"foreignKey:TargetID"`
-	FuzzResults []FuzzResult `gorm:"foreignKey:TargetID"`
+	ID           uint   `gorm:"primaryKey"`
+	Domain       string `gorm:"uniqueIndex;not null"`
+	Type         string `gorm:"default:'domain'"` // domain, ip, url
+	CreatedAt    time.Time
+	LastScanned  time.Time
+	ScanResults  []ScanResult `gorm:"foreignKey:TargetID"`
+	FuzzResults  []FuzzResult `gorm:"foreignKey:TargetID"`
+	Subdomains   []Subdomain  `gorm:"foreignKey:TargetID"`
+	Technologies []Technology `gorm:"foreignKey:TargetID"`
 }
 
 // ScanResult stores reconnaissance data
 type ScanResult struct {
 	ID          uint   `gorm:"primaryKey"`
 	TargetID    uint   `gorm:"not null"`
-	ScanMode    string `gorm:"not null"` // basic, deep, stealth, aggressive
-	Type        string `gorm:"not null"` // dns, whois, subdomain, tech
+	ScanMode    string `gorm:"not null"`  // basic, deep, stealth, aggressive
+	Type        string `gorm:"not null"`  // dns, whois, subdomain, tech
 	Data        string `gorm:"type:json"` // JSON-encoded data
 	TotRequests int    `gorm:"default:0"`
 	CreatedAt   time.Time

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -65,4 +66,22 @@ func (d *Database) Close() error {
 		return err
 	}
 	return sqlDB.Close()
+}
+
+// GetTargetReportData fetches all data related to a target for reporting
+func (d *Database) GetTargetReportData(targetInput string) (*Target, error) {
+	var target Target
+
+	result := d.db.Preload("ScanResults").
+		Preload("FuzzResults").
+		Preload("Subdomains").
+		Preload("Technologies").
+		Where("domain = ?", targetInput).
+		First(&target)
+
+	if result.Error != nil {
+		return nil, result.Error
+	}
+
+	return &target, nil
 }

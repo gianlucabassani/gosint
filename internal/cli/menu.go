@@ -98,7 +98,7 @@ func domainReconMenu(reader *bufio.Reader) {
 	fmt.Println("3. Stealth    (Active:  Slow enumeration)")
 	fmt.Println("4. Aggressive (Active:  Fast enumeration + Fuzzing)")
 	fmt.Println("5. Custom     (Configure manually)")
-	
+
 	modeChoice := promptInput(reader, pterm.Cyan("Mode: "))
 	var config scanner.ScanConfig
 
@@ -149,18 +149,57 @@ func domainReconMenu(reader *bufio.Reader) {
 	ctx, cancel := CreateCancellableContext()
 	defer cancel()
 
-	_, err := s.Scan(ctx)
+	// Capture report to get correct target name/domain
+	report, err := s.Scan(ctx)
 	if err != nil {
 		pterm.Error.Printf("Scan failed: %v\n", err)
+	}
+
+	if report != nil {
+		handleReportExport(reader, report.Target)
+	} else {
+		handleReportExport(reader, domain) // Fallback
 	}
 
 	pressEnterToContinue(reader)
 }
 
+func handleReportExport(reader *bufio.Reader, target string) {
+	fmt.Println()
+	printHeader("REPORT GENERATION")
+	fmt.Println("Select format to export:")
+	fmt.Println("1. JSON")
+	fmt.Println("2. HTML")
+	fmt.Println("3. CSV")
+	fmt.Println("4. PDF")
+	fmt.Println("5. All Formats")
+	fmt.Println("0. Skip")
+
+	choice := promptInput(reader, pterm.Cyan("Choice: "))
+
+	switch choice {
+	case "1":
+		ExecuteExport(target, "json", "")
+	case "2":
+		ExecuteExport(target, "html", "")
+	case "3":
+		ExecuteExport(target, "csv", "")
+	case "4":
+		ExecuteExport(target, "pdf", "")
+	case "5":
+		formats := []string{"json", "html", "csv", "pdf"}
+		for _, f := range formats {
+			ExecuteExport(target, f, "")
+		}
+	default:
+		// Skip
+	}
+}
+
 // buildCustomScanConfig creates a config via simple y/n prompts
 func buildCustomScanConfig(reader *bufio.Reader, domain string) scanner.ScanConfig {
 	fmt.Println("\n-- Custom Configuration --")
-	
+
 	config := scanner.ScanConfig{
 		Target:       domain,
 		Mode:         scanner.ModeCustom,
@@ -173,12 +212,16 @@ func buildCustomScanConfig(reader *bufio.Reader, domain string) scanner.ScanConf
 	config.EnableWHOIS = promptYesNo(reader, "Enable WHOIS lookup?", true)
 	config.EnableTechDetection = promptYesNo(reader, "Enable Tech Detection?", true)
 	config.EnablePassive = promptYesNo(reader, "Enable Passive Recon (crt.sh/Wayback)?", true)
-	
+
 	config.EnableSubdomains = promptYesNo(reader, "Enable Active Subdomain Enumeration?", false)
 	if config.EnableSubdomains {
 		limitStr := promptInput(reader, "  Limit (default 1000): ")
-		if limitStr == "" { config.SubdomainLimit = 1000 } else {
-			if v, err := strconv.Atoi(limitStr); err == nil { config.SubdomainLimit = v }
+		if limitStr == "" {
+			config.SubdomainLimit = 1000
+		} else {
+			if v, err := strconv.Atoi(limitStr); err == nil {
+				config.SubdomainLimit = v
+			}
 		}
 	}
 
@@ -186,10 +229,14 @@ func buildCustomScanConfig(reader *bufio.Reader, domain string) scanner.ScanConf
 	if config.EnableFuzzing {
 		config.FuzzDirectories = promptYesNo(reader, "  Fuzz Directories?", true)
 		config.FuzzVHosts = promptYesNo(reader, "  Fuzz VHosts?", false)
-		
+
 		threadStr := promptInput(reader, "  Threads (default 40): ")
-		if threadStr == "" { config.FuzzThreads = 40 } else {
-			if v, err := strconv.Atoi(threadStr); err == nil { config.FuzzThreads = v }
+		if threadStr == "" {
+			config.FuzzThreads = 40
+		} else {
+			if v, err := strconv.Atoi(threadStr); err == nil {
+				config.FuzzThreads = v
+			}
 		}
 	}
 
@@ -201,13 +248,19 @@ func crawlerMenu(reader *bufio.Reader) {
 	printHeader("WEB CRAWLER")
 
 	url := promptInput(reader, "Enter URL: ")
-	if url == "" { return }
-	
+	if url == "" {
+		return
+	}
+
 	depthStr := promptInput(reader, "Depth (default 2): ")
 	depth := 2
-	if d, err := strconv.Atoi(depthStr); err == nil { depth = d }
+	if d, err := strconv.Atoi(depthStr); err == nil {
+		depth = d
+	}
 
-	if !strings.HasPrefix(url, "http") { url = "https://" + url }
+	if !strings.HasPrefix(url, "http") {
+		url = "https://" + url
+	}
 
 	printHeader(fmt.Sprintf("CRAWLING: %s", url))
 
@@ -237,7 +290,7 @@ func crawlerMenu(reader *bufio.Reader) {
 			emails += len(r.OSINT.Emails)
 			phones += len(r.OSINT.Phones)
 		}
-		
+
 		fmt.Println()
 		pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(pterm.TableData{
 			{"Metric", "Count"},
@@ -255,29 +308,39 @@ func fuzzingMenu(reader *bufio.Reader) {
 	fmt.Println("1. Directories")
 	fmt.Println("2. Virtual Hosts")
 	fmt.Println("3. Subdomains")
-	
+
 	choice := promptInput(reader, pterm.Cyan("Mode: "))
 	var mode fuzzer.FuzzMode
-	
+
 	switch choice {
-	case "1": mode = fuzzer.ModeDirectory
-	case "2": mode = fuzzer.ModeVHost
-	case "3": mode = fuzzer.ModeSubdomain
-	default: return
+	case "1":
+		mode = fuzzer.ModeDirectory
+	case "2":
+		mode = fuzzer.ModeVHost
+	case "3":
+		mode = fuzzer.ModeSubdomain
+	default:
+		return
 	}
 
 	target := promptInput(reader, "Target: ")
-	if target == "" { return }
+	if target == "" {
+		return
+	}
 
 	cfg := fuzzer.FuzzerConfig{
-		Target: target,
-		Mode: mode,
+		Target:   target,
+		Mode:     mode,
 		Wordlist: "embedded:directories",
-		Threads: 40,
-		Timeout: 10,
+		Threads:  40,
+		Timeout:  10,
 	}
-	if mode == fuzzer.ModeSubdomain { cfg.Wordlist = "embedded:subdomains" }
-	if mode == fuzzer.ModeVHost { cfg.Wordlist = "embedded:vhosts" }
+	if mode == fuzzer.ModeSubdomain {
+		cfg.Wordlist = "embedded:subdomains"
+	}
+	if mode == fuzzer.ModeVHost {
+		cfg.Wordlist = "embedded:vhosts"
+	}
 
 	ctx, cancel := CreateCancellableContext()
 	defer cancel()
@@ -301,7 +364,7 @@ func settingsMenu(reader *bufio.Reader) {
 	fmt.Println("1. Database Stats")
 	fmt.Println("2. Clear Database")
 	fmt.Println("0. Back")
-	
+
 	choice := promptInput(reader, pterm.Cyan("Choice: "))
 	db := storage.GetInstance()
 
@@ -341,10 +404,10 @@ func promptYesNo(reader *bufio.Reader, prompt string, defaultYes bool) bool {
 	if !defaultYes {
 		suffix = " [y/N]: "
 	}
-	
+
 	response := promptInput(reader, prompt+suffix)
 	response = strings.ToLower(response)
-	
+
 	if response == "" {
 		return defaultYes
 	}
