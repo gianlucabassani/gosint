@@ -27,7 +27,7 @@ func CreateCancellableContext() (context.Context, context.CancelFunc) {
 
 	go func() {
 		<-opSigChan
-		fmt.Printf("\n\n⚠️  Received interrupt signal, stopping operation...\n\n")
+		fmt.Printf("\n\n  Received interrupt signal, stopping operation...\n\n")
 		cancel()
 	}()
 
@@ -93,7 +93,7 @@ Examples:
 	Run: func(cmd *cobra.Command, args []string) {
 		target, _ := cmd.Flags().GetString("target")
 		if target == "" {
-			fmt.Println("❌ Error: --target/-t flag is required")
+			fmt.Println(" Error: --target/-t flag is required")
 			os.Exit(1)
 		}
 
@@ -122,9 +122,9 @@ Examples:
 		report, err := s.Scan(ctx)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
-				fmt.Printf("\n%s Scan interrupted by user\n", "⚠️")
+				fmt.Printf("\n%s Scan interrupted by user\n", "")
 			} else {
-				fmt.Printf("\n❌ Scan failed: %v\n", err)
+				fmt.Printf("\n Scan failed: %v\n", err)
 			}
 			return
 		}
@@ -155,7 +155,7 @@ func getSelectedMode(cmd *cobra.Command) scanner.ScanMode {
 	}
 
 	if modeCount > 1 {
-		fmt.Println("❌ Error: Only one scan mode can be selected at a time")
+		fmt.Println(" Error: Only one scan mode can be selected at a time")
 		os.Exit(1)
 	}
 
@@ -216,7 +216,7 @@ func buildCustomConfig(cmd *cobra.Command, target string) scanner.ScanConfig {
 	// Validate: at least one feature must be enabled
 	if !config.EnableDNS && !config.EnableWHOIS && !config.EnableTechDetection &&
 		!config.EnablePassive && !config.EnableSubdomains && !config.EnableFuzzing {
-		fmt.Println("❌ Error: At least one feature must be enabled in custom mode")
+		fmt.Println(" Error: At least one feature must be enabled in custom mode")
 		fmt.Println("   Use flags like --enable-dns, --enable-whois, etc.")
 		os.Exit(1)
 	}
@@ -232,7 +232,7 @@ var crawlCmd = &cobra.Command{
 		depth, _ := cmd.Flags().GetInt("depth")
 
 		if urlStr == "" {
-			fmt.Println("❌ Error: --url/-u flag is required")
+			fmt.Println(" Error: --url/-u flag is required")
 			os.Exit(1)
 		}
 
@@ -243,7 +243,7 @@ var crawlCmd = &cobra.Command{
 		db := storage.GetInstance()
 		targetObj, _ := db.CreateOrUpdateTarget(urlStr, "url")
 
-		fmt.Printf("🕷️  Starting OSINT Crawl: %s (Depth: %d)\n", urlStr, depth)
+		fmt.Printf("  Starting OSINT Crawl: %s (Depth: %d)\n", urlStr, depth)
 
 		config := crawler.CrawlerConfig{
 			TargetURL:     urlStr,
@@ -260,9 +260,9 @@ var crawlCmd = &cobra.Command{
 		results, err := c.Start(ctx)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
-				fmt.Printf("\n%s Crawl interrupted by user\n", "⚠️")
+				fmt.Printf("\n%s Crawl interrupted by user\n", "")
 			} else {
-				fmt.Printf("\n❌ Crawl failed: %v\n", err)
+				fmt.Printf("\n Crawl failed: %v\n", err)
 			}
 			return
 		}
@@ -273,7 +273,7 @@ var crawlCmd = &cobra.Command{
 			phones += len(r.OSINT.Phones)
 		}
 
-		fmt.Printf("\n✅ Crawl Complete\n")
+		fmt.Printf("\n Crawl Complete\n")
 		fmt.Printf("   Pages Visited: %d\n", len(results))
 		fmt.Printf("   Emails Found:  %d\n", emails)
 		fmt.Printf("   Phones Found:  %d\n", phones)
@@ -285,7 +285,7 @@ var crawlCmd = &cobra.Command{
 
 func offerReportGeneration(target string) {
 	fmt.Println("\n" + strings.Repeat("─", 50))
-	fmt.Println("📊 Scan completed! Generate report?")
+	fmt.Println(" Scan completed! Generate report?")
 	fmt.Println("Available formats: JSON, HTML, CSV, PDF")
 	fmt.Println("Run: gosint export --target " + target + " --format [json|html|csv|pdf]")
 	fmt.Println("Or use the interactive menu to generate reports.")
@@ -301,7 +301,7 @@ var exportCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if target == "" {
-			fmt.Println("❌ Error: --target flag is required")
+			fmt.Println(" Error: --target flag is required")
 			os.Exit(1)
 		}
 
@@ -315,12 +315,12 @@ var exportCmd = &cobra.Command{
 		}
 
 		if !isValid {
-			fmt.Printf("❌ Error: Invalid format '%s'. Choose: json, html, csv, pdf\n", format)
+			fmt.Printf(" Error: Invalid format '%s'. Choose: json, html, csv, pdf\n", format)
 			os.Exit(1)
 		}
 
 		if err := ExecuteExport(target, format, output); err != nil {
-			fmt.Printf("❌ Error: %v\n", err)
+			fmt.Printf(" Error: %v\n", err)
 			os.Exit(1)
 		}
 	},
@@ -380,7 +380,7 @@ func ExecuteExport(target, format, output string) error {
 		return fmt.Errorf("generating report: %w", err)
 	}
 
-	fmt.Printf("✅ Report generated successfully: %s\n", output)
+	fmt.Printf(" Report generated successfully: %s\n", output)
 	return nil
 }
 
@@ -409,12 +409,12 @@ Example:
 		}
 
 		if effectiveTarget == "" {
-			fmt.Println("❌ Error: --url or --target is required")
+			fmt.Println(" Error: --url or --target is required")
 			os.Exit(1)
 		}
 
 		if modeStr == "" {
-			fmt.Println("❌ Error: --mode is required (directory, vhost, subdomain)")
+			fmt.Println(" Error: --mode is required (directory, vhost, subdomain)")
 			os.Exit(1)
 		}
 
@@ -427,7 +427,7 @@ Example:
 		case "subdomain":
 			mode = fuzzer.ModeSubdomain
 		default:
-			fmt.Println("❌ Error: Invalid mode. Use directory, vhost, or subdomain")
+			fmt.Println(" Error: Invalid mode. Use directory, vhost, or subdomain")
 			os.Exit(1)
 		}
 
@@ -450,7 +450,7 @@ Example:
 			Timeout:  10,
 		}
 
-		fmt.Printf("🎯 Starting %s fuzzing on %s\n", modeStr, effectiveTarget)
+		fmt.Printf(" Starting %s fuzzing on %s\n", modeStr, effectiveTarget)
 		fmt.Printf("   Wordlist: %s\n", wordlist)
 		fmt.Printf("   Threads: %d\n", threads)
 
@@ -461,14 +461,14 @@ Example:
 		results, err := f.Start(ctx)
 		if err != nil {
 			if ctx.Err() == context.Canceled {
-				fmt.Printf("\n%s Fuzzing interrupted by user\n", "⚠️")
+				fmt.Printf("\n%s Fuzzing interrupted by user\n", "")
 			} else {
-				fmt.Printf("\n❌ Fuzzing failed: %v\n", err)
+				fmt.Printf("\n Fuzzing failed: %v\n", err)
 			}
 			return
 		}
 
-		fmt.Printf("\n✨ Fuzzing Complete: Found %d items\n", len(results))
+		fmt.Printf("\n Fuzzing Complete: Found %d items\n", len(results))
 	},
 }
 

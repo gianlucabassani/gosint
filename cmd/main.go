@@ -12,13 +12,13 @@ import (
 func main() {
 	// init db
 	homeDir, err := os.UserHomeDir()
-	if err != nil { 
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 		os.Exit(1)
 	}
 
 	dbPath := filepath.Join(homeDir, ".gosint", "gosint.db")
-	
+
 	// Ensure .gosint directory exists
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating database directory: %v\n", err)

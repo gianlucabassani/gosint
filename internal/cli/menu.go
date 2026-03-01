@@ -354,7 +354,10 @@ func fuzzingMenu(reader *bufio.Reader) {
 }
 
 func osintMenu(reader *bufio.Reader) {
-	pterm.Warning.Println("Coming in Phase 3")
+	clearScreen()
+	printHeader("OSINT INVESTIGATION")
+	pterm.Info.Println("OSINT features are currently integrated into the Web Crawler.")
+	pterm.Info.Println("To extract emails and phone numbers, please use the Web Crawler from the main menu.")
 	pressEnterToContinue(reader)
 }
 

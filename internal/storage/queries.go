@@ -3,18 +3,18 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 	"gorm.io/gorm"
+	"time"
 )
 
 // CreateOrUpdateTarget finds or creates a target
 func (d *Database) CreateOrUpdateTarget(domain, targetType string) (*Target, error) {
 	var target Target
 	// search for existing target
-	result := d.db.Where("domain = ?", domain).First(&target) 
+	result := d.db.Where("domain = ?", domain).First(&target)
 
 	// crate new target entry or update last scanned time
-	if result.Error == gorm.ErrRecordNotFound { 
+	if result.Error == gorm.ErrRecordNotFound {
 		target = Target{
 			Domain:      domain,
 			Type:        targetType,
@@ -34,7 +34,7 @@ func (d *Database) CreateOrUpdateTarget(domain, targetType string) (*Target, err
 	return &target, nil
 }
 
-// SaveScanResult stores scan data 
+// SaveScanResult stores scan data
 func (d *Database) SaveScanResult(targetID uint, scanMode, scanType string, data map[string]interface{}, requests int) error {
 	jsonData, _ := json.Marshal(data)
 

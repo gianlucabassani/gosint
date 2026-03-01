@@ -101,15 +101,18 @@ func ExtractEmails(text string) []string {
 
 	for _, email := range matches {
 		lower := strings.ToLower(email)
-		
+
 		// 1. Check Extensions
 		isAsset := false
 		for _, ext := range excludedExtensions {
 			if strings.HasSuffix(lower, ext) {
-				isAsset = true; break
+				isAsset = true
+				break
 			}
 		}
-		if isAsset { continue }
+		if isAsset {
+			continue
+		}
 
 		// 2. Check Excluded Domains
 		parts := strings.Split(lower, "@")
@@ -131,24 +134,34 @@ func isFalsePositive(phone string) bool {
 	clean := strings.TrimPrefix(phone, "+")
 
 	// 1. Check if it matches an IP address structure
-	if ipPattern.MatchString(clean) { return true }
+	if ipPattern.MatchString(clean) {
+		return true
+	}
 
 	// 2. Check for Sequential numbers (e.g. +1 12345678)
-	if isSequential(clean) { return true }
+	if isSequential(clean) {
+		return true
+	}
 
 	// 3. Check for Repeats (e.g. +1 00000000)
-	if isRepeated(clean) { return true }
+	if isRepeated(clean) {
+		return true
+	}
 
 	// 4. Check for Date-like patterns
 	for _, p := range datePatterns {
-		if p.MatchString(clean) { return true }
+		if p.MatchString(clean) {
+			return true
+		}
 	}
 
 	return false
 }
 
 func isSequential(s string) bool {
-	if len(s) < 6 { return false }
+	if len(s) < 6 {
+		return false
+	}
 	count := 0
 	for i := 0; i < len(s)-1; i++ {
 		if s[i+1] == s[i]+1 {
@@ -156,13 +169,17 @@ func isSequential(s string) bool {
 		} else {
 			count = 0
 		}
-		if count > 4 { return true }
+		if count > 4 {
+			return true
+		}
 	}
 	return false
 }
 
 func isRepeated(s string) bool {
-	if len(s) < 6 { return false }
+	if len(s) < 6 {
+		return false
+	}
 	count := 0
 	for i := 0; i < len(s)-1; i++ {
 		if s[i+1] == s[i] {
@@ -170,7 +187,9 @@ func isRepeated(s string) bool {
 		} else {
 			count = 0
 		}
-		if count > 4 { return true }
+		if count > 4 {
+			return true
+		}
 	}
 	return false
 }

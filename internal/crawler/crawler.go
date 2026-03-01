@@ -24,15 +24,15 @@ type CrawlerConfig struct {
 }
 
 type CrawlResult struct {
-	URL      string
-	Title    string
-	OSINT    ExtractedData
-	Links    int
+	URL   string
+	Title string
+	OSINT ExtractedData
+	Links int
 }
 
 type Crawler struct {
 	config  CrawlerConfig
-	visited sync.Map 
+	visited sync.Map
 	db      *storage.Database
 	client  *http.Client
 }
@@ -57,8 +57,8 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 	fmt.Printf(" :: Max Threads      : %d\n", c.config.MaxConcurrent)
 	fmt.Printf("%s\n\n", color.BlueString("════════════════════════════════════════════════════════════"))
 
-	resultsChan := make(chan CrawlResult) // channel (which is a goroutine-safe queue) to collect results from workers
-	var wg sync.WaitGroup // limit concurrency with WaitGroup + buffered channel
+	resultsChan := make(chan CrawlResult)              // channel (which is a goroutine-safe queue) to collect results from workers
+	var wg sync.WaitGroup                              // limit concurrency with WaitGroup + buffered channel
 	sem := make(chan struct{}, c.config.MaxConcurrent) // semaphore pattern to limit concurrent goroutines
 
 	// Start crawling
@@ -83,10 +83,10 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 }
 
 func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, depth int, wg *sync.WaitGroup, sem chan struct{}, results chan<- CrawlResult) {
-	defer wg.Done() 
+	defer wg.Done()
 
 	// Check if context is cancelled
-	select { 
+	select {
 	case <-ctx.Done(): // return a channel that is closed when this context is cancelled / times out
 		return
 	default:

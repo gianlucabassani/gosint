@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
 
 // CrtShEntry represents a single entry from crt.sh JSON response
@@ -44,7 +43,7 @@ func DefaultPassiveConfig() PassiveConfig {
 // NOW WITH: Parallelism, Retry Logic, Thread-Safe Result Collection
 func RunPassiveRecon(domain string) (*PassiveResult, error) {
 	config := DefaultPassiveConfig()
-	
+
 	result := &PassiveResult{
 		Source: "External APIs (crt.sh, Wayback Machine)",
 		Errors: []error{},
@@ -58,12 +57,12 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		
+
 		subs, err := queryCrtShWithRetry(domain, config)
-		
+
 		mu.Lock()
 		defer mu.Unlock()
-		
+
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("crt.sh: %w", err))
 		} else {
@@ -75,12 +74,12 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		
+
 		urls, err := queryWaybackWithRetry(domain, config)
-		
+
 		mu.Lock()
 		defer mu.Unlock()
-		
+
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("wayback: %w", err))
 		} else {
@@ -97,40 +96,40 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 // queryCrtShWithRetry queries crt.sh with automatic retry on failure
 func queryCrtShWithRetry(domain string, config PassiveConfig) ([]string, error) {
 	var lastErr error
-	
+
 	for attempt := 1; attempt <= config.MaxRetries; attempt++ {
 		subdomains, err := queryCrtSh(domain, config.RequestTimeout)
 		if err == nil {
 			return subdomains, nil
 		}
-		
+
 		lastErr = err
-		
+
 		if attempt < config.MaxRetries {
 			time.Sleep(config.RetryDelay)
 		}
 	}
-	
+
 	return nil, fmt.Errorf("all %d attempts failed: %w", config.MaxRetries, lastErr)
 }
 
 // queryWaybackWithRetry queries Wayback Machine with automatic retry
 func queryWaybackWithRetry(domain string, config PassiveConfig) ([]string, error) {
 	var lastErr error
-	
+
 	for attempt := 1; attempt <= config.MaxRetries; attempt++ {
 		urls, err := queryWayback(domain, config.RequestTimeout)
 		if err == nil {
 			return urls, nil
 		}
-		
+
 		lastErr = err
-		
+
 		if attempt < config.MaxRetries {
 			time.Sleep(config.RetryDelay)
 		}
 	}
-	
+
 	return nil, fmt.Errorf("all %d attempts failed: %w", config.MaxRetries, lastErr)
 }
 
@@ -149,7 +148,7 @@ func queryCrtSh(domain string, timeout time.Duration) ([]string, error) {
 	if resp.StatusCode == 502 {
 		return nil, fmt.Errorf("service temporarily unavailable (502 Bad Gateway)")
 	}
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
@@ -197,7 +196,7 @@ func queryWayback(domain string, timeout time.Duration) ([]string, error) {
 	if resp.StatusCode == 502 {
 		return nil, fmt.Errorf("service temporarily unavailable (502 Bad Gateway)")
 	}
-	
+
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}

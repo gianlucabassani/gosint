@@ -125,7 +125,7 @@ func (f *Fuzzer) Start(ctx context.Context) ([]FuzzResult, error) {
 
 	// Clear progress bar line
 	fmt.Printf("\r\033[K")
-	
+
 	duration := time.Since(startTime)
 	fmt.Println(color.BlueString("\n════════════════════════════════════════════════════════════"))
 	fmt.Printf(" :: Scan Finished in : %s\n", duration)
@@ -200,7 +200,7 @@ func (f *Fuzzer) processWord(word string) {
 		if f.config.Mode == ModeVHost {
 			result.URL = fmt.Sprintf("%s.%s", word, f.config.Target) // Display Host header
 		}
-		
+
 		f.addResult(result)
 		f.printResult(result)
 	}
@@ -213,10 +213,14 @@ func (f *Fuzzer) shouldSave(code, size int) bool {
 		return false
 	}
 	for _, fc := range f.config.FilterCodes {
-		if code == fc { return false }
+		if code == fc {
+			return false
+		}
 	}
 	for _, mc := range f.config.MatchCodes {
-		if code == mc { return true }
+		if code == mc {
+			return true
+		}
 	}
 	return false
 }
@@ -232,11 +236,11 @@ func (f *Fuzzer) incrementChecked() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checked++
-	
+
 	// Update progress every 50 requests
 	if f.checked%50 == 0 || f.checked == f.total {
 		prog := float64(f.checked) / float64(f.total) * 100
-		fmt.Printf("\r\033[K[%s] %d/%d (%.1f%%)", 
+		fmt.Printf("\r\033[K[%s] %d/%d (%.1f%%)",
 			color.CyanString("PROGRESS"), f.checked, f.total, prog)
 	}
 }
@@ -261,11 +265,11 @@ func (f *Fuzzer) printResult(r FuzzResult) {
 	}
 
 	// Format: Status | Size | Words | Duration | URL
-	fmt.Printf("%-19s %-10d %-10d %-10v %s\n", 
-		statusStr, 
-		r.Size, 
-		len(r.WordUsed), 
-		r.Duration.Round(time.Millisecond), 
+	fmt.Printf("%-19s %-10d %-10d %-10v %s\n",
+		statusStr,
+		r.Size,
+		len(r.WordUsed),
+		r.Duration.Round(time.Millisecond),
 		r.URL,
 	)
 }

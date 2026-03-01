@@ -93,7 +93,7 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 							StatusCode: resp.StatusCode,
 						}
 						// Print finding in green as it's discovered
-						pterm.Printf("    %s %s -> %s\n", pterm.Green("▶"), pterm.Cyan(subdomain), pterm.White(ip))
+						pterm.Printf("    %s %s -> %s\n", pterm.Green(""), pterm.Cyan(subdomain), pterm.White(ip))
 					}
 				}
 			}
