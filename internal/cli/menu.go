@@ -10,8 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gianlucabassani/gosint/internal/config"
 	"github.com/gianlucabassani/gosint/internal/crawler"
 	"github.com/gianlucabassani/gosint/internal/fuzzer"
+	"github.com/gianlucabassani/gosint/internal/osint"
 	"github.com/gianlucabassani/gosint/internal/scanner"
 	"github.com/gianlucabassani/gosint/internal/storage"
 	"github.com/pterm/pterm"
@@ -354,10 +356,132 @@ func fuzzingMenu(reader *bufio.Reader) {
 }
 
 func osintMenu(reader *bufio.Reader) {
+	for {
+		clearScreen()
+		printHeader("OSINT INVESTIGATION")
+		fmt.Println("1. Email Profile    (breaches, deliverability, disposable check)")
+		fmt.Println("2. Social Search    (enumerate platforms via Sherlock)")
+		fmt.Println("3. Domain Enrichment (Wayback Machine, robots.txt, Shodan)")
+		fmt.Println("0. Back")
+		fmt.Println()
+
+		choice := promptInput(reader, pterm.Cyan("Choice: "))
+
+		switch choice {
+		case "1":
+			osintEmailMenu(reader)
+		case "2":
+			osintSocialMenu(reader)
+		case "3":
+			osintDomainMenu(reader)
+		case "0":
+			return
+		default:
+			pterm.Error.Println("Invalid choice.")
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func osintEmailMenu(reader *bufio.Reader) {
 	clearScreen()
-	printHeader("OSINT INVESTIGATION")
-	pterm.Info.Println("OSINT features are currently integrated into the Web Crawler.")
-	pterm.Info.Println("To extract emails and phone numbers, please use the Web Crawler from the main menu.")
+	printHeader("EMAIL PROFILE")
+
+	email := promptInput(reader, "Enter email address: ")
+	if email == "" {
+		return
+	}
+
+	keys := osint.LoadAPIKeys()
+	s := osint.NewEmailScanner(keys)
+
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+
+	fmt.Printf("\n  Profiling: %s\n", email)
+	fmt.Println()
+
+	profile, err := s.Profile(ctx, email)
+	if err != nil {
+		pterm.Error.Printf("Email profile failed: %v\n", err)
+		pressEnterToContinue(reader)
+		return
+	}
+
+	printEmailProfile(profile)
+
+	if promptYesNo(reader, "Save to database?", true) {
+		saveEmailProfileToDB(profile, 0)
+	}
+
+	pressEnterToContinue(reader)
+}
+
+func osintSocialMenu(reader *bufio.Reader) {
+	clearScreen()
+	printHeader("SOCIAL SEARCH")
+
+	s := osint.NewSocialScanner()
+	if !s.IsAvailable() {
+		pterm.Warning.Println("Sherlock is not installed.")
+		pterm.Info.Println("Install it with: pip install sherlock-project")
+		pressEnterToContinue(reader)
+		return
+	}
+
+	username := promptInput(reader, "Enter username: ")
+	if username == "" {
+		return
+	}
+
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+
+	fmt.Printf("\n  Searching profiles for: %s\n", username)
+	fmt.Println()
+
+	profiles, err := s.FindProfiles(ctx, username)
+	if err != nil {
+		pterm.Error.Printf("Social search failed: %v\n", err)
+		pressEnterToContinue(reader)
+		return
+	}
+
+	fmt.Printf("\n  Found %d confirmed profile(s)\n", len(profiles))
+
+	if len(profiles) > 0 && promptYesNo(reader, "Save to database?", true) {
+		saveSocialProfilesToDB(username, profiles, 0)
+	}
+
+	pressEnterToContinue(reader)
+}
+
+func osintDomainMenu(reader *bufio.Reader) {
+	clearScreen()
+	printHeader("DOMAIN ENRICHMENT")
+
+	domain := promptInput(reader, "Enter domain: ")
+	if domain == "" {
+		return
+	}
+
+	keys := osint.LoadAPIKeys()
+	e := osint.NewDomainEnricher(keys)
+
+	ctx, cancel := CreateCancellableContext()
+	defer cancel()
+
+	fmt.Printf("\n  Enriching: %s\n", domain)
+	fmt.Println()
+
+	profile, err := e.Enrich(ctx, domain)
+	if err != nil {
+		pterm.Error.Printf("Domain enrichment failed: %v\n", err)
+		pressEnterToContinue(reader)
+		return
+	}
+
+	printDomainProfile(profile)
 	pressEnterToContinue(reader)
 }
 
@@ -366,6 +490,7 @@ func settingsMenu(reader *bufio.Reader) {
 	printHeader("SETTINGS")
 	fmt.Println("1. Database Stats")
 	fmt.Println("2. Clear Database")
+	fmt.Println("3. Manage API Keys")
 	fmt.Println("0. Back")
 
 	choice := promptInput(reader, pterm.Cyan("Choice: "))
@@ -385,10 +510,78 @@ func settingsMenu(reader *bufio.Reader) {
 			pterm.Success.Println("Database cleared.")
 		}
 		pressEnterToContinue(reader)
+	} else if choice == "3" {
+		apiKeyMenu(reader)
 	}
 }
 
 // --- Helpers ---
+
+func apiKeyMenu(reader *bufio.Reader) {
+	for {
+		clearScreen()
+		printHeader("MANAGE API KEYS")
+
+		status := config.GetAPIKeyStatus()
+
+		pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(pterm.TableData{
+			{"Service", "Status"},
+			{"1. Shodan", getStatusColor(status["SHODAN_API_KEY"])},
+			{"2. Hunter.io", getStatusColor(status["HUNTER_API_KEY"])},
+			{"3. HaveIBeenPwned", getStatusColor(status["HIBP_API_KEY"])},
+		}).Render()
+
+		fmt.Println("\n0. Back")
+
+		choice := promptInput(reader, pterm.Cyan("\nSelect service to update (0-3): "))
+
+		var keyName string
+		switch choice {
+		case "1":
+			keyName = "SHODAN_API_KEY"
+		case "2":
+			keyName = "HUNTER_API_KEY"
+		case "3":
+			keyName = "HIBP_API_KEY"
+		case "0":
+			return
+		default:
+			pterm.Error.Println("Invalid choice.")
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		fmt.Println()
+		apiKey, err := pterm.DefaultInteractiveTextInput.WithMask("*").Show("Enter API Key")
+		if err != nil {
+			pterm.Error.Printf("Error reading input: %v\n", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		apiKey = strings.TrimSpace(apiKey)
+		if apiKey == "" {
+			pterm.Warning.Println("Empty API Key entirely. Not updating.")
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		if err := config.SaveAPIKey(keyName, apiKey); err != nil {
+			pterm.Error.Printf("Failed to save API Key: %v\n", err)
+			time.Sleep(2 * time.Second)
+		} else {
+			pterm.Success.Printf("Successfully updated %s\n", keyName)
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+func getStatusColor(isConfigured bool) string {
+	if isConfigured {
+		return pterm.Green("Configured")
+	}
+	return pterm.Red("Not Configured")
+}
 
 func printHeader(title string) {
 	fmt.Printf("%s\n", pterm.Blue("═══════════════════════════════════════════════════"))

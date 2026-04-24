@@ -6,15 +6,17 @@ import (
 
 // Target represents a scanned domain/IP
 type Target struct {
-	ID           uint   `gorm:"primaryKey"`
-	Domain       string `gorm:"uniqueIndex;not null"`
-	Type         string `gorm:"default:'domain'"` // domain, ip, url
-	CreatedAt    time.Time
-	LastScanned  time.Time
-	ScanResults  []ScanResult `gorm:"foreignKey:TargetID"`
-	FuzzResults  []FuzzResult `gorm:"foreignKey:TargetID"`
-	Subdomains   []Subdomain  `gorm:"foreignKey:TargetID"`
-	Technologies []Technology `gorm:"foreignKey:TargetID"`
+	ID             uint   `gorm:"primaryKey"`
+	Domain         string `gorm:"uniqueIndex;not null"`
+	Type           string `gorm:"default:'domain'"` // domain, ip, url
+	CreatedAt      time.Time
+	LastScanned    time.Time
+	ScanResults    []ScanResult   `gorm:"foreignKey:TargetID"`
+	FuzzResults    []FuzzResult   `gorm:"foreignKey:TargetID"`
+	Subdomains     []Subdomain    `gorm:"foreignKey:TargetID"`
+	Technologies   []Technology   `gorm:"foreignKey:TargetID"`
+	EmailProfiles  []EmailProfile `gorm:"foreignKey:TargetID"`
+	SocialProfiles []SocialProfile `gorm:"foreignKey:TargetID"`
 }
 
 // ScanResult stores reconnaissance data
@@ -57,5 +59,41 @@ type Technology struct {
 	Name      string `gorm:"not null"`
 	Version   string
 	Category  string // server, cms, framework, analytics
+	CreatedAt time.Time
+}
+
+// EmailProfile stores the result of an email OSINT scan.
+type EmailProfile struct {
+	ID          uint         `gorm:"primaryKey"`
+	TargetID    uint         `gorm:"index;not null"`
+	Email       string       `gorm:"not null"`
+	Disposable  bool
+	Deliverable string        // "deliverable", "undeliverable", "risky", "unknown", or ""
+	Score       int           // Hunter.io confidence score 0–100
+	Breaches    []BreachEntry `gorm:"foreignKey:EmailProfileID"`
+	BreachCount int
+	CreatedAt   time.Time
+}
+
+// BreachEntry stores a single data breach associated with an EmailProfile.
+type BreachEntry struct {
+	ID             uint   `gorm:"primaryKey"`
+	EmailProfileID uint   `gorm:"index;not null"`
+	Name           string
+	Domain         string
+	BreachDate     string
+	DataClasses    string `gorm:"type:json"` // JSON-encoded []string
+	PwnCount       int
+	CreatedAt      time.Time
+}
+
+// SocialProfile stores a single social media account found via Sherlock.
+type SocialProfile struct {
+	ID        uint   `gorm:"primaryKey"`
+	TargetID  uint   `gorm:"index;not null"`
+	Username  string `gorm:"not null"`
+	Platform  string `gorm:"not null"`
+	URL       string
+	Confirmed bool
 	CreatedAt time.Time
 }

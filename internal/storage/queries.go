@@ -102,6 +102,12 @@ func (d *Database) GetDatabaseStats() map[string]int64 {
 	stats["subdomains"] = count
 	d.db.Model(&Technology{}).Count(&count)
 	stats["technologies"] = count
+	d.db.Model(&EmailProfile{}).Count(&count)
+	stats["email_profiles"] = count
+	d.db.Model(&BreachEntry{}).Count(&count)
+	stats["breaches"] = count
+	d.db.Model(&SocialProfile{}).Count(&count)
+	stats["social_profiles"] = count
 
 	return stats
 }
@@ -159,4 +165,74 @@ func (d *Database) SaveTechnology(targetID uint, name, version, category string)
 	}
 
 	return d.db.Create(tech).Error
+}
+
+// SaveEmailProfile persists an EmailProfile and its associated BreachEntry records.
+// targetID is optional (0 = standalone scan not linked to a domain target).
+func (d *Database) SaveEmailProfile(targetID uint, email, deliverable string, score int, disposable bool, breachCount int, breaches []struct{ Name, Domain, BreachDate, DataClasses string; PwnCount int }) (*EmailProfile, error) {
+	profile := &EmailProfile{
+		TargetID:    targetID,
+		Email:       email,
+		Disposable:  disposable,
+		Deliverable: deliverable,
+		Score:       score,
+		BreachCount: breachCount,
+		CreatedAt:   time.Now(),
+	}
+
+	if err := d.db.Create(profile).Error; err != nil {
+		return nil, err
+	}
+
+	for _, b := range breaches {
+		entry := &BreachEntry{
+			EmailProfileID: profile.ID,
+			Name:           b.Name,
+			Domain:         b.Domain,
+			BreachDate:     b.BreachDate,
+			DataClasses:    b.DataClasses,
+			PwnCount:       b.PwnCount,
+			CreatedAt:      time.Now(),
+		}
+		if err := d.db.Create(entry).Error; err != nil {
+			return nil, fmt.Errorf("saving breach entry %q: %w", b.Name, err)
+		}
+	}
+
+	return profile, nil
+}
+
+// SaveSocialProfiles bulk-saves a slice of social profiles for a target/username.
+// targetID is optional (0 = standalone scan).
+func (d *Database) SaveSocialProfiles(targetID uint, username string, profiles []struct{ Platform, URL string; Confirmed bool }) error {
+	for _, p := range profiles {
+		record := &SocialProfile{
+			TargetID:  targetID,
+			Username:  username,
+			Platform:  p.Platform,
+			URL:       p.URL,
+			Confirmed: p.Confirmed,
+			CreatedAt: time.Now(),
+		}
+		if err := d.db.Create(record).Error; err != nil {
+			return fmt.Errorf("saving social profile %q/%q: %w", username, p.Platform, err)
+		}
+	}
+	return nil
+}
+
+// GetEmailProfiles returns all EmailProfile records, optionally filtered by target.
+func (d *Database) GetEmailProfiles(targetID uint) ([]EmailProfile, error) {
+	var profiles []EmailProfile
+	query := d.db.Preload("Breaches")
+	if targetID != 0 {
+		query = query.Where("target_id = ?", targetID)
+	}
+	return profiles, query.Find(&profiles).Error
+}
+
+// GetSocialProfiles returns all SocialProfile records for a given username.
+func (d *Database) GetSocialProfiles(username string) ([]SocialProfile, error) {
+	var profiles []SocialProfile
+	return profiles, d.db.Where("username = ?", username).Find(&profiles).Error
 }

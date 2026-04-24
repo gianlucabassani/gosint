@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gorm.io/driver/sqlite"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -43,6 +43,9 @@ func Initialize(dbPath string) (*Database, error) {
 		&FuzzResult{},
 		&Subdomain{},
 		&Technology{},
+		&EmailProfile{},
+		&BreachEntry{},
+		&SocialProfile{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
 	}

@@ -1,15 +1,15 @@
 module github.com/gianlucabassani/gosint
 
-go 1.22
+go 1.25.0
 
 require (
 	github.com/fatih/color v1.18.0
+	github.com/glebarez/sqlite v1.11.0
 	github.com/johnfercher/maroto v1.0.0
 	github.com/nyaruka/phonenumbers v1.3.5
 	github.com/pterm/pterm v0.12.82
 	github.com/spf13/cobra v1.10.2
-	gorm.io/driver/sqlite v1.5.4
-	gorm.io/gorm v1.25.5
+	gorm.io/gorm v1.25.7
 )
 
 require (
@@ -18,6 +18,8 @@ require (
 	atomicgo.dev/schedule v0.1.0 // indirect
 	github.com/boombuler/barcode v1.0.1 // indirect
 	github.com/containerd/console v1.0.5 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/gookit/color v1.5.4 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -28,7 +30,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/mattn/go-sqlite3 v1.14.34 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/ruudk/golang-pdf417 v0.0.0-20201230142125-a7e3863a1245 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
@@ -36,5 +38,10 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
+	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
+	modernc.org/libc v1.22.5 // indirect
+	modernc.org/mathutil v1.5.0 // indirect
+	modernc.org/memory v1.5.0 // indirect
+	modernc.org/sqlite v1.23.1 // indirect
 )

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/gianlucabassani/gosint/internal/crawler"
 	"github.com/gianlucabassani/gosint/internal/fuzzer"
+	"github.com/gianlucabassani/gosint/internal/osint"
 	"github.com/gianlucabassani/gosint/internal/reports"
 	"github.com/gianlucabassani/gosint/internal/scanner"
 	"github.com/gianlucabassani/gosint/internal/storage"
@@ -532,9 +535,262 @@ func init() {
 	fuzzCmd.Flags().Bool("follow-redirects", false, "Follow HTTP redirects")
 	fuzzCmd.MarkFlagRequired("mode")
 
-	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd)
+	// OSINT command flags
+	osintEmailCmd.Flags().StringP("target", "t", "", "Email address to profile (required)")
+	osintEmailCmd.MarkFlagRequired("target")
+
+	osintSocialCmd.Flags().StringP("username", "u", "", "Username to search (required)")
+	osintSocialCmd.MarkFlagRequired("username")
+
+	osintDomainCmd.Flags().StringP("target", "t", "", "Domain to enrich (required)")
+	osintDomainCmd.MarkFlagRequired("target")
+
+	osintCmd.AddCommand(osintEmailCmd, osintSocialCmd, osintDomainCmd)
+
+	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd, osintCmd)
 }
 
 func Execute() error {
 	return rootCmd.Execute()
+}
+
+// ---------------------------------------------------------------------------
+// OSINT command group
+// ---------------------------------------------------------------------------
+
+var osintCmd = &cobra.Command{
+	Use:   "osint",
+	Short: "OSINT profiling: email breaches, social presence, domain enrichment",
+	Long: `OSINT Investigation commands:
+
+  email   Profile an email address (breach check, deliverability, disposable detection)
+  social  Enumerate social media presence for a username via Sherlock
+  domain  Enrich a domain with Wayback Machine history, robots.txt, and Shodan data
+
+Examples:
+  gosint osint email -t user@example.com
+  gosint osint social -u johndoe
+  gosint osint domain -t example.com`,
+}
+
+var osintEmailCmd = &cobra.Command{
+	Use:   "email",
+	Short: "Profile an email address for breaches and deliverability",
+	Run: func(cmd *cobra.Command, args []string) {
+		email, _ := cmd.Flags().GetString("target")
+		if email == "" {
+			fmt.Println(" Error: --target/-t flag is required (provide email address)")
+			os.Exit(1)
+		}
+
+		keys := osint.LoadAPIKeys()
+		s := osint.NewEmailScanner(keys)
+
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		fmt.Printf("\n  Profiling email: %s\n", email)
+		fmt.Println(strings.Repeat("─", 50))
+
+		profile, err := s.Profile(ctx, email)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				fmt.Println("\n  Scan interrupted by user")
+			} else {
+				fmt.Printf("\n  Email profile failed: %v\n", err)
+			}
+			return
+		}
+
+		printEmailProfile(profile)
+		saveEmailProfileToDB(profile, 0)
+	},
+}
+
+var osintSocialCmd = &cobra.Command{
+	Use:   "social",
+	Short: "Enumerate social media profiles for a username via Sherlock",
+	Run: func(cmd *cobra.Command, args []string) {
+		username, _ := cmd.Flags().GetString("username")
+		if username == "" {
+			fmt.Println(" Error: --username/-u flag is required")
+			os.Exit(1)
+		}
+
+		s := osint.NewSocialScanner()
+		if !s.IsAvailable() {
+			fmt.Println(" Error: sherlock is not installed.")
+			fmt.Println("   Install with: pip install sherlock-project")
+			os.Exit(1)
+		}
+
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		fmt.Printf("\n  Searching social profiles for: %s\n", username)
+		fmt.Println(strings.Repeat("─", 50))
+
+		profiles, err := s.FindProfiles(ctx, username)
+		if err != nil {
+			if errors.Is(err, osint.ErrServiceUnavailable) {
+				fmt.Printf("\n  Service unavailable: %v\n", err)
+			} else if ctx.Err() == context.Canceled {
+				fmt.Println("\n  Search interrupted by user")
+			} else {
+				fmt.Printf("\n  Social search failed: %v\n", err)
+			}
+			return
+		}
+
+		fmt.Printf("\n  Found %d profile(s) for '%s'\n", len(profiles), username)
+		saveSocialProfilesToDB(username, profiles, 0)
+	},
+}
+
+var osintDomainCmd = &cobra.Command{
+	Use:   "domain",
+	Short: "Enrich a domain with Wayback Machine, robots.txt, and Shodan data",
+	Run: func(cmd *cobra.Command, args []string) {
+		domain, _ := cmd.Flags().GetString("target")
+		if domain == "" {
+			fmt.Println(" Error: --target/-t flag is required")
+			os.Exit(1)
+		}
+
+		keys := osint.LoadAPIKeys()
+		e := osint.NewDomainEnricher(keys)
+
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		fmt.Printf("\n  Enriching domain: %s\n", domain)
+		fmt.Println(strings.Repeat("─", 50))
+
+		profile, err := e.Enrich(ctx, domain)
+		if err != nil {
+			if ctx.Err() == context.Canceled {
+				fmt.Println("\n  Enrichment interrupted by user")
+			} else {
+				fmt.Printf("\n  Domain enrichment failed: %v\n", err)
+			}
+			return
+		}
+
+		printDomainProfile(profile)
+	},
+}
+
+// printEmailProfile displays a formatted email profile to stdout.
+func printEmailProfile(p *osint.EmailProfile) {
+	fmt.Println()
+	fmt.Printf("  Email          : %s\n", p.Email)
+	fmt.Printf("  Disposable     : %v\n", p.Disposable)
+	fmt.Printf("  Breach Count   : %d\n", p.BreachCount)
+
+	if p.Deliverability != nil {
+		d := p.Deliverability
+		fmt.Printf("  Deliverable    : %s (score: %d)\n", d.Result, d.Score)
+		fmt.Printf("  MX Records     : %v\n", d.MXRecords)
+	}
+
+	if len(p.Breaches) > 0 {
+		fmt.Println()
+		fmt.Println("  ── Breaches ─────────────────────────────")
+		for _, b := range p.Breaches {
+			fmt.Printf("  [!] %-25s %s  (%d accounts)\n", b.Name+":", b.BreachDate, b.PwnCount)
+			if len(b.DataClasses) > 0 {
+				fmt.Printf("      Data: %s\n", strings.Join(b.DataClasses, ", "))
+			}
+		}
+	}
+	fmt.Println()
+}
+
+// printDomainProfile displays a formatted domain profile to stdout.
+func printDomainProfile(p *osint.DomainProfile) {
+	fmt.Println()
+	fmt.Printf("  Domain         : %s\n", p.Domain)
+	fmt.Printf("  Wayback URLs   : %d\n", p.WaybackCount)
+
+	if p.RobotsTxt != "" {
+		lines := strings.Split(p.RobotsTxt, "\n")
+		fmt.Printf("  robots.txt     : %d lines\n", len(lines))
+	} else {
+		fmt.Println("  robots.txt     : not found")
+	}
+
+	if p.Shodan != nil {
+		s := p.Shodan
+		fmt.Println()
+		fmt.Println("  ── Shodan ───────────────────────────────")
+		fmt.Printf("  Organization   : %s\n", s.Organization)
+		fmt.Printf("  ISP            : %s\n", s.ISP)
+		fmt.Printf("  Country        : %s\n", s.Country)
+		fmt.Printf("  Open Ports     : %v\n", s.Ports)
+		if len(s.Vulns) > 0 {
+			fmt.Printf("  Vulns          : %s\n", strings.Join(s.Vulns, ", "))
+		}
+	}
+	fmt.Println()
+}
+
+// saveEmailProfileToDB persists a scanned email profile to the database.
+func saveEmailProfileToDB(profile *osint.EmailProfile, targetID uint) {
+	db := storage.GetInstance()
+
+	deliverable := ""
+	score := 0
+	if profile.Deliverability != nil {
+		deliverable = profile.Deliverability.Result
+		score = profile.Deliverability.Score
+	}
+
+	type breachRow struct {
+		Name, Domain, BreachDate, DataClasses string
+		PwnCount                              int
+	}
+
+	var breaches []struct {
+		Name, Domain, BreachDate, DataClasses string
+		PwnCount                              int
+	}
+	for _, b := range profile.Breaches {
+		dc, _ := json.Marshal(b.DataClasses)
+		breaches = append(breaches, struct {
+			Name, Domain, BreachDate, DataClasses string
+			PwnCount                              int
+		}{b.Name, b.Domain, b.BreachDate, string(dc), b.PwnCount})
+	}
+
+	_, err := db.SaveEmailProfile(targetID, profile.Email, deliverable, score, profile.Disposable, profile.BreachCount, breaches)
+	if err != nil {
+		fmt.Printf("  [!] Failed to save email profile to DB: %v\n", err)
+	} else {
+		fmt.Println("  [+] Email profile saved to database")
+	}
+}
+
+// saveSocialProfilesToDB persists social profiles to the database.
+func saveSocialProfilesToDB(username string, profiles []osint.SocialProfile, targetID uint) {
+	if len(profiles) == 0 {
+		return
+	}
+
+	db := storage.GetInstance()
+	var rows []struct {
+		Platform, URL string
+		Confirmed     bool
+	}
+	for _, p := range profiles {
+		rows = append(rows, struct {
+			Platform, URL string
+			Confirmed     bool
+		}{p.Platform, p.URL, p.Confirmed})
+	}
+
+	if err := db.SaveSocialProfiles(targetID, username, rows); err != nil {
+		fmt.Printf("  [!] Failed to save social profiles to DB: %v\n", err)
+	} else {
+		fmt.Printf("  [+] %d social profile(s) saved to database\n", len(profiles))
+	}
 }
