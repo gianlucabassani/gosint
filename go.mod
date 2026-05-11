@@ -9,6 +9,7 @@ require (
 	github.com/nyaruka/phonenumbers v1.3.5
 	github.com/pterm/pterm v0.12.82
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/time v0.15.0
 	gorm.io/gorm v1.25.7
 )
 
@@ -38,7 +39,6 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/term v0.32.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect

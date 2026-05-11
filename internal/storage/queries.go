@@ -125,6 +125,12 @@ func (d *Database) ClearTable(tableName string) error {
 		return d.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Subdomain{}).Error
 	case "technologies":
 		return d.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&Technology{}).Error
+	case "email_profiles":
+		return d.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&EmailProfile{}).Error
+	case "breach_entries":
+		return d.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&BreachEntry{}).Error
+	case "social_profiles":
+		return d.db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&SocialProfile{}).Error
 	default:
 		return fmt.Errorf("unknown table: %s", tableName)
 	}
@@ -132,7 +138,7 @@ func (d *Database) ClearTable(tableName string) error {
 
 // ClearAllTables empties all tables
 func (d *Database) ClearAllTables() error {
-	tables := []string{"targets", "scan_results", "fuzz_results", "subdomains", "technologies"}
+	tables := []string{"targets", "scan_results", "fuzz_results", "subdomains", "technologies", "email_profiles", "breach_entries", "social_profiles"}
 	for _, table := range tables {
 		if err := d.ClearTable(table); err != nil {
 			return err

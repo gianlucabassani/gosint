@@ -57,15 +57,14 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 	fmt.Printf(" :: Max Threads      : %d\n", c.config.MaxConcurrent)
 	fmt.Printf("%s\n\n", color.BlueString("════════════════════════════════════════════════════════════"))
 
-	resultsChan := make(chan CrawlResult)              // channel (which is a goroutine-safe queue) to collect results from workers
-	var wg sync.WaitGroup                              // limit concurrency with WaitGroup + buffered channel
-	sem := make(chan struct{}, c.config.MaxConcurrent) // semaphore pattern to limit concurrent goroutines
+	// resultsChan is unbuffered to avoid blocking when many results arrive
+	resultsChan := make(chan CrawlResult)
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, c.config.MaxConcurrent)
 
-	// Start crawling
-	wg.Add(1) // add initial task for the root URL
+	wg.Add(1)
 	go c.crawl(ctx, c.config.TargetURL, baseURL.Host, 0, &wg, sem, resultsChan)
 
-	// Monitor & Close
 	go func() {
 		wg.Wait()
 		close(resultsChan)
@@ -85,9 +84,8 @@ func (c *Crawler) Start(ctx context.Context) ([]CrawlResult, error) {
 func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, depth int, wg *sync.WaitGroup, sem chan struct{}, results chan<- CrawlResult) {
 	defer wg.Done()
 
-	// Check if context is cancelled
 	select {
-	case <-ctx.Done(): // return a channel that is closed when this context is cancelled / times out
+	case <-ctx.Done():
 		return
 	default:
 	}
@@ -95,14 +93,13 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 	if depth > c.config.MaxDepth {
 		return
 	}
-	if _, loaded := c.visited.LoadOrStore(target, true); loaded { // check if URL has already been visited (thread-safe)
+	if _, loaded := c.visited.LoadOrStore(target, true); loaded {
 		return
 	}
 
 	sem <- struct{}{}
 	defer func() { <-sem }()
 
-	// Real-time log
 	indent := strings.Repeat("  ", depth)
 	fmt.Printf("%s%s %s\n", indent, color.YellowString("→"), target)
 
@@ -116,18 +113,16 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024)) // cap at 4MB
 	if err != nil {
 		return
 	}
 	body := string(bodyBytes)
 
-	// Extract data
 	osintData := ExtractOSINT(body)
 	links := extractLinks(body, target)
 	title := extractTitle(body)
 
-	// Real-time FINDINGS log
 	if len(osintData.Emails) > 0 {
 		for _, email := range osintData.Emails {
 			fmt.Printf("%s  %s %s\n", indent, color.GreenString("[+] EMAIL:"), email)
@@ -139,6 +134,7 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 		}
 	}
 
+	// Bug #4 fix: always emit a result for every successfully fetched page
 	results <- CrawlResult{
 		URL:   target,
 		Title: title,
@@ -146,9 +142,13 @@ func (c *Crawler) crawl(ctx context.Context, target string, scopeHost string, de
 		Links: len(links),
 	}
 
-	// Recurse
+	// SPA detection hint
+	if len(links) == 0 && depth == 0 {
+		fmt.Printf("%s  %s\n", indent, color.YellowString("[!] No links found on root page — may be a SPA (JavaScript-rendered). Try crawling specific API endpoints."))
+	}
+
 	for _, link := range links {
-		u, err := url.Parse(link) // check the base domain of the link to ensure we stay within scope
+		u, err := url.Parse(link)
 		if err == nil && u.Host == scopeHost {
 			wg.Add(1)
 			go c.crawl(ctx, link, scopeHost, depth+1, wg, sem, results)

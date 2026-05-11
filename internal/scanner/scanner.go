@@ -479,7 +479,7 @@ func (s *Scanner) runSubdomainPhase(ctx context.Context, report *ScanReport) err
 	default:
 	}
 
-	subdomains, err := EnumerateSubdomains(s.config.Target, s.config.SubdomainLimit)
+	subdomains, err := EnumerateSubdomains(s.config.Target, s.config.SubdomainLimit, s.config.SubdomainThreads)
 	if err != nil {
 		return err
 	}

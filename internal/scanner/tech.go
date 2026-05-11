@@ -2,7 +2,7 @@ package scanner
 
 import (
 	"crypto/tls"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -19,8 +19,9 @@ type TechResult struct {
 	MetaTags        map[string]string `json:"meta_tags"`
 }
 
-// AnalyzeTech performs comprehensive technology detection by analyzing HTTP responses
-func AnalyzeTech(targetURL string) (*TechResult, error) {
+// AnalyzeTech performs comprehensive technology detection by analyzing HTTP responses.
+// insecure=true skips TLS certificate verification (use for self-signed cert targets).
+func AnalyzeTech(targetURL string, insecure ...bool) (*TechResult, error) {
 	if !strings.HasPrefix(targetURL, "http") {
 		targetURL = "https://" + targetURL
 	}
@@ -33,21 +34,30 @@ func AnalyzeTech(targetURL string) (*TechResult, error) {
 		MetaTags:        make(map[string]string),
 	}
 
-	// Fetch Content with SSL skip
-	client := &http.Client{
-		Timeout: 15 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
+	// Build transport — only skip TLS verification when explicitly requested (Bug #7)
+	transport := &http.Transport{}
+	if len(insecure) > 0 && insecure[0] {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
 	}
 
-	resp, err := client.Get(targetURL)
+	client := &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: transport,
+	}
+
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GOSINT/2.0; +https://github.com/gianlucabassani/gosint)")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024)) // cap at 2MB
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +92,13 @@ func detectFrameworks(r *TechResult, headers http.Header, body string, url strin
 	if gen := headers.Get("X-Generator"); gen != "" {
 		r.Frameworks = append(r.Frameworks, "Generator: "+gen)
 	}
+	// Cloudflare detection via headers
+	if cf := headers.Get("CF-RAY"); cf != "" {
+		addUnique(r, "Cloudflare")
+	}
+	if headers.Get("X-Sucuri-ID") != "" {
+		addUnique(r, "Sucuri WAF")
+	}
 
 	// Meta Generator Check
 	metaGenRe := regexp.MustCompile(`(?i)<meta[^>]*name=["']generator["'][^>]*content=["']([^"']+)["']`)
@@ -89,24 +106,49 @@ func detectFrameworks(r *TechResult, headers http.Header, body string, url strin
 		r.Frameworks = append(r.Frameworks, strings.TrimSpace(match[1]))
 	}
 
-	// Content Signatures
+	// CMS Content Signatures
 	if strings.Contains(body, "wp-content") || strings.Contains(body, "wp-includes") {
 		addUnique(r, "WordPress")
 	}
-	if strings.Contains(body, "drupal-css") {
+	if strings.Contains(body, "drupal.js") || strings.Contains(body, "drupal-settings-json") {
 		addUnique(r, "Drupal")
 	}
-	if strings.Contains(body, "joomla") {
+	if strings.Contains(body, "joomla") || strings.Contains(body, "/components/com_") {
 		addUnique(r, "Joomla")
 	}
-	if strings.Contains(body, "Powered by Shopify") {
+	if strings.Contains(body, "Powered by Shopify") || strings.Contains(body, "shopify.com/s/files") {
 		addUnique(r, "Shopify")
 	}
-	if strings.Contains(body, "squarespace.com") {
+	if strings.Contains(body, "squarespace.com") || strings.Contains(body, "sqsp-user") {
 		addUnique(r, "Squarespace")
 	}
-	if strings.Contains(body, "wix.com") {
+	if strings.Contains(body, "wix.com") || strings.Contains(body, "wixsite.com") {
 		addUnique(r, "Wix")
+	}
+
+	// JS Framework Signatures
+	if strings.Contains(body, "__NEXT_DATA__") || strings.Contains(body, "_next/static") {
+		addUnique(r, "Next.js")
+	}
+	if strings.Contains(body, "__NUXT__") || strings.Contains(body, "_nuxt/") {
+		addUnique(r, "Nuxt.js")
+	}
+	if strings.Contains(body, "ng-version") || strings.Contains(body, "ng-app") {
+		addUnique(r, "Angular")
+	}
+
+	// Backend Framework Signatures
+	if headers.Get("X-Laravel-Version") != "" || strings.Contains(body, "laravel_session") {
+		addUnique(r, "Laravel")
+	}
+	if headers.Get("X-Django-Version") != "" || strings.Contains(body, "csrfmiddlewaretoken") {
+		addUnique(r, "Django")
+	}
+	if headers.Get("X-AspNet-Version") != "" || headers.Get("X-Powered-By") == "ASP.NET" {
+		addUnique(r, "ASP.NET")
+	}
+	if strings.Contains(headers.Get("Set-Cookie"), "_rails_") || strings.Contains(body, "rails-ujs") {
+		addUnique(r, "Ruby on Rails")
 	}
 
 	// URL Pattern Checks

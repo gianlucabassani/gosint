@@ -333,17 +333,21 @@ var exportCmd = &cobra.Command{
 func ExecuteExport(target, format, output string) error {
 	fmt.Printf("Exporting %s report for %s\n", format, target)
 
-	// Prepare output directory and filename
+	// Prepare output directory and filename (Improvement #5: use $HOME/.gosint/reports/ not CWD)
 	if output == "" {
-		// Create data/<target> directory
-		dataDir := "data"
-		targetDir := filepath.Join(dataDir, target)
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("could not determine home directory: %w", err)
+		}
+		// Sanitize target for use as directory name
+		safeTarget := strings.NewReplacer("/", "_", ":", "", ".", ".").Replace(target)
+		targetDir := filepath.Join(homeDir, ".gosint", "reports", safeTarget)
 		if err := os.MkdirAll(targetDir, 0755); err != nil {
 			return fmt.Errorf("creating directory %s: %w", targetDir, err)
 		}
 
 		timestamp := time.Now().Format("20060102_150405")
-		filename := fmt.Sprintf("report_%s_%s.%s", target, timestamp, format)
+		filename := fmt.Sprintf("report_%s.%s", timestamp, format)
 		output = filepath.Join(targetDir, filename)
 	}
 
@@ -359,15 +363,14 @@ func ExecuteExport(target, format, output string) error {
 	reportData := reports.ReportData{
 		Target:    targetObj.Domain,
 		ScanDate:  targetObj.LastScanned,
-		ScanMode:  "Unknown", // We might want to store the last scan mode in Target or infer it
+		ScanMode:  "Unknown",
 		TargetObj: targetObj,
-		// Map specific fields
 		Technologies: targetObj.Technologies,
 		Subdomains:   targetObj.Subdomains,
 		Fuzzing:      targetObj.FuzzResults,
 	}
 
-	// Filter ScanResults into specific categories if needed
+	// Filter ScanResults into specific categories
 	for _, sr := range targetObj.ScanResults {
 		if sr.Type == "dns" {
 			reportData.DNS = append(reportData.DNS, sr)
@@ -376,7 +379,6 @@ func ExecuteExport(target, format, output string) error {
 		}
 	}
 
-	// Calculate total duration if available, else placeholder
 	reportData.Duration = "N/A"
 
 	if err := reports.GenerateReport(format, output, reportData); err != nil {

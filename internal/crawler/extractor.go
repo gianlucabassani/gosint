@@ -1,14 +1,11 @@
 package crawler
 
 import (
-	"log"
 	"regexp"
 	"strings"
 
 	"github.com/nyaruka/phonenumbers"
 )
-
-var logger = log.New(log.Writer(), "osint.extractors: ", log.LstdFlags|log.Lshortfile)
 
 // Email regex pattern
 var emailRegex = regexp.MustCompile(`[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
@@ -47,7 +44,6 @@ func ExtractOSINT(content string) ExtractedData {
 
 // ExtractPhoneNumbers uses Regex to find candidates, then strictly validates them using libphonenumber
 func ExtractPhoneNumbers(text string) []string {
-	logger.Println("Starting phone number extraction...")
 	foundPhones := make(map[string]bool)
 	var phones []string
 
@@ -86,11 +82,9 @@ func ExtractPhoneNumbers(text string) []string {
 		if !foundPhones[formatted] {
 			foundPhones[formatted] = true
 			phones = append(phones, formatted)
-			logger.Printf("Found Valid Phone: %s", formatted)
 		}
 	}
 
-	logger.Printf("Extraction complete. Found %d valid numbers.", len(phones))
 	return phones
 }
 

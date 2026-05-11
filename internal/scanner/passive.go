@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pterm/pterm"
 )
 
 // CrtShEntry represents a single entry from crt.sh JSON response
@@ -32,7 +34,7 @@ type PassiveConfig struct {
 // DefaultPassiveConfig returns sensible defaults
 func DefaultPassiveConfig() PassiveConfig {
 	return PassiveConfig{
-		MaxRetries:     3,
+		MaxRetries:     2, // Reduced from 3 — avoids 45s silent hang (Bug #1)
 		RetryDelay:     2 * time.Second,
 		RequestTimeout: 15 * time.Second,
 	}
@@ -49,7 +51,6 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 		Errors: []error{},
 	}
 
-	// Thread-safe result collection using mutex
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -57,7 +58,7 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
+		pterm.Printf("   [*] Querying crt.sh for %s...\n", domain)
 		subs, err := queryCrtShWithRetry(domain, config)
 
 		mu.Lock()
@@ -74,7 +75,7 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
+		pterm.Printf("   [*] Querying Wayback Machine for %s...\n", domain)
 		urls, err := queryWaybackWithRetry(domain, config)
 
 		mu.Lock()
@@ -87,7 +88,6 @@ func RunPassiveRecon(domain string) (*PassiveResult, error) {
 		}
 	}()
 
-	// Wait for all goroutines to complete
 	wg.Wait()
 
 	return result, nil

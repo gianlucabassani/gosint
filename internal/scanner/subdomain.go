@@ -1,17 +1,14 @@
 package scanner
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gianlucabassani/gosint/internal/fuzzer"
 	"github.com/pterm/pterm"
 )
 
@@ -21,49 +18,47 @@ type SubdomainResult struct {
 	StatusCode int
 }
 
-func loadSubdomainWordlist(wordlistPath string) ([]string, error) {
-	file, err := os.Open(wordlistPath)
+// EnumerateSubdomains performs active subdomain enumeration using the embedded
+// wordlist. limit=0 means use the full list. threads controls concurrency.
+func EnumerateSubdomains(domain string, limit, threads int) ([]SubdomainResult, error) {
+	// Use the fuzzer's embedded wordlist loader — works regardless of CWD (Bug #5)
+	subdomains, err := fuzzer.LoadWordlist("embedded:subdomains")
 	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var subdomains []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		word := strings.TrimSpace(scanner.Text())
-		if word != "" && !strings.HasPrefix(word, "#") {
-			subdomains = append(subdomains, word)
-		}
-	}
-	return subdomains, scanner.Err()
-}
-
-func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
-	// Try to load from wordlist file
-	wordlistPath := filepath.Join("internal", "fuzzer", "wordlists", "subdomains.txt")
-	subdomains, err := loadSubdomainWordlist(wordlistPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load wordlist: %w", err)
+		return nil, fmt.Errorf("failed to load embedded subdomain wordlist: %w", err)
 	}
 
 	if limit > 0 && len(subdomains) > limit {
 		subdomains = subdomains[:limit]
 	}
 
-	// Channels and sync
-	const workers = 10
-	workChan := make(chan string, len(subdomains))
-	resultChan := make(chan *SubdomainResult, len(subdomains))
+	if threads <= 0 {
+		threads = 10
+	}
+
+	workChan := make(chan string, threads)
+	resultChan := make(chan SubdomainResult, len(subdomains))
 	var wg sync.WaitGroup
 	var checked, found int64
 
-	client := &http.Client{
+	httpClient := &http.Client{
 		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // Don't follow redirects — caller interprets 3xx
+		},
+	}
+
+	// probeURL tries a URL and returns (statusCode, ok). Body is always closed. (Bug #9)
+	probeURL := func(rawURL string) (int, bool) {
+		resp, err := httpClient.Get(rawURL)
+		if err != nil {
+			return 0, false
+		}
+		resp.Body.Close() // Direct close, not deferred — no connection leak
+		return resp.StatusCode, true
 	}
 
 	// Create worker goroutines
-	for i := 0; i < workers && i < len(subdomains); i++ {
+	for i := 0; i < threads; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -71,36 +66,52 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 				subdomain := fmt.Sprintf("%s.%s", word, domain)
 				atomic.AddInt64(&checked, 1)
 
-				// Try DNS lookup first
+				// DNS lookup first — skip if no A record
 				var ip string
 				ips, err := net.LookupIP(subdomain)
-				if err == nil && len(ips) > 0 {
+				if err != nil || len(ips) == 0 {
+					continue // No DNS = not live
+				}
+				for _, a := range ips {
+					if a.To4() != nil {
+						ip = a.String()
+						break
+					}
+				}
+				if ip == "" {
 					ip = ips[0].String()
 				}
 
-				// Check HTTP response
-				url := fmt.Sprintf("http://%s", subdomain)
-				resp, err := client.Get(url)
-				if err == nil {
-					defer resp.Body.Close()
+				// Probe HTTP, then HTTPS as fallback (Improvement #3)
+				var code int
+				var ok bool
+				code, ok = probeURL(fmt.Sprintf("http://%s", subdomain))
+				if !ok {
+					code, ok = probeURL(fmt.Sprintf("https://%s", subdomain))
+				}
+				if !ok {
+					continue
+				}
 
-					// Valid status codes: 2xx and 3xx
-					if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-						atomic.AddInt64(&found, 1)
-						resultChan <- &SubdomainResult{
-							Subdomain:  subdomain,
-							IP:         ip,
-							StatusCode: resp.StatusCode,
-						}
-						// Print finding in green as it's discovered
-						pterm.Printf("    %s %s -> %s\n", pterm.Green(""), pterm.Cyan(subdomain), pterm.White(ip))
+				if (code >= 200 && code < 400) || code == 401 || code == 403 {
+					atomic.AddInt64(&found, 1)
+					resultChan <- SubdomainResult{
+						Subdomain:  subdomain,
+						IP:         ip,
+						StatusCode: code,
 					}
+					pterm.Printf("    %s %s -> %s [%d]\n",
+						pterm.Green(""),
+						pterm.Cyan(subdomain),
+						pterm.White(ip),
+						code,
+					)
 				}
 			}
 		}()
 	}
 
-	// Send work to workers
+	// Feed words to workers
 	go func() {
 		for _, word := range subdomains {
 			workChan <- word
@@ -108,23 +119,15 @@ func EnumerateSubdomains(domain string, limit int) ([]SubdomainResult, error) {
 		close(workChan)
 	}()
 
-	// Wait for all workers to finish
 	wg.Wait()
 	close(resultChan)
 
-	// Collect results
-	var results []*SubdomainResult
-	for result := range resultChan {
-		results = append(results, result)
-	}
-
-	// Convert pointers to values for return
 	var finalResults []SubdomainResult
-	for _, r := range results {
-		if r != nil {
-			finalResults = append(finalResults, *r)
-		}
+	for r := range resultChan {
+		finalResults = append(finalResults, r)
 	}
 
+	_ = checked // used via atomic for future progress display
+	_ = found
 	return finalResults, nil
 }

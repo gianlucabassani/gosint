@@ -3,6 +3,7 @@ package fuzzer
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,16 @@ import (
 
 	"github.com/fatih/color"
 )
+
+// userAgents is a pool of realistic browser User-Agent strings rotated per request.
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/124.0.0.0 Safari/537.36",
+}
 
 type FuzzMode string
 
@@ -29,6 +40,7 @@ type FuzzerConfig struct {
 	FilterCodes    []int
 	FilterSize     int
 	FollowRedirect bool
+	RateLimit      int // max requests/second (0 = unlimited)
 }
 
 type FuzzResult struct {
@@ -115,7 +127,7 @@ func (f *Fuzzer) Start(ctx context.Context) ([]FuzzResult, error) {
 			select {
 			case wordChan <- word:
 			case <-ctx.Done():
-				break
+				return // Bug #8 fix: return exits the goroutine, not just the select
 			}
 		}
 		close(wordChan)
@@ -151,17 +163,14 @@ func (f *Fuzzer) processWord(word string) {
 	var targetURL string
 	switch f.config.Mode {
 	case ModeDirectory:
-		// Ensure clean slash handling
 		base := strings.TrimRight(f.config.Target, "/")
 		targetURL = fmt.Sprintf("%s/%s", base, word)
 	case ModeVHost:
 		targetURL = f.config.Target
 	case ModeSubdomain:
-		// Assume target is domain, prepend protocol if needed for request
 		if !strings.HasPrefix(f.config.Target, "http") {
 			targetURL = fmt.Sprintf("https://%s.%s", word, f.config.Target)
 		} else {
-			// Strip protocol to insert subdomain
 			parts := strings.SplitN(f.config.Target, "://", 2)
 			targetURL = fmt.Sprintf("%s://%s.%s", parts[0], word, parts[1])
 		}
@@ -174,10 +183,12 @@ func (f *Fuzzer) processWord(word string) {
 		return
 	}
 
+	// Rotate User-Agent per request (Improvement #2)
+	req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
+
 	if f.config.Mode == ModeVHost {
-		// e.g. word.example.com
 		req.Host = fmt.Sprintf("%s.%s", word, f.config.Target)
-		req.URL.Host = f.config.Target // Request goes to IP/Domain
+		req.URL.Host = f.config.Target
 	}
 
 	resp, err := f.client.Do(req)

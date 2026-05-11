@@ -83,7 +83,7 @@ func (e *DomainEnricher) Enrich(ctx context.Context, domain string) (*DomainProf
 			}
 		}
 	} else {
-		fmt.Printf("  [!] Shodan key not configured — host enrichment skipped\n")
+		fmt.Printf("  [-] Shodan key not configured — host enrichment skipped\n")
 	}
 
 	return profile, nil
@@ -165,7 +165,7 @@ func (e *DomainEnricher) FetchRobotsTxt(ctx context.Context, domain string) (str
 }
 
 // FetchShodan queries the Shodan REST API for host information by IP address.
-// Requires a valid Shodan API key. Returns ErrAPIKeyMissing if no key is set.
+// Returns ErrAPIKeyMissing if no key is set, or a descriptive error if the key is invalid.
 func (e *DomainEnricher) FetchShodan(ctx context.Context, ip string) (*ShodanInfo, error) {
 	if e.keys.Shodan == "" {
 		return nil, ErrAPIKeyMissing
@@ -180,7 +180,8 @@ func (e *DomainEnricher) FetchShodan(ctx context.Context, ip string) (*ShodanInf
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("%w: Shodan API key invalid", ErrAPIKeyMissing)
+		// Bug #3 fix: distinguish "key present but rejected" from "key absent"
+		return nil, fmt.Errorf("Shodan API key is invalid or expired (HTTP 401)")
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
