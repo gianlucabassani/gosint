@@ -1,7 +1,7 @@
 <h1 align="center">GOSINT</h1>
 
 <p align="center">
-  <b>Go Security Intelligence Toolkit — fast, single-binary OSINT & reconnaissance.</b><br>
+  <b>Go Security Intelligence Toolkit — fast OSINT & reconnaissance.</b><br>
   Domain recon, web crawling, fuzzing, and entity-centric OSINT profiling — from one
   concurrent, dependency-free CLI that persists everything to a local SQLite database.
 </p>
@@ -22,9 +22,6 @@ structured local database you can query, enrich, and export. Active recon
 HaveIBeenPwned, Shodan, social) degrades gracefully when keys are absent; and an
 **entity model** ties findings about the same target — its domain facts, per-source
 profiles, and harvested contacts — into one profile you can report on.
-
-> **Authorized use only.** GOSINT is for security research, authorized assessments,
-> and educational use. You are responsible for having permission to probe any target.
 
 > **Successor to [Browsint](../browsint).** GOSINT absorbs Browsint's OSINT
 > entity/contact model and extraction pipeline into Go (single static binary,
