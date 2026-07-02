@@ -394,6 +394,20 @@ func (d *Database) GetEntityByDomain(domain string) (*Entity, error) {
 	return &entity, nil
 }
 
+// GetEntityByID returns an entity (with DomainInfo, Profiles, Contacts) by ID.
+func (d *Database) GetEntityByID(id uint) (*Entity, error) {
+	var entity Entity
+	result := d.db.
+		Preload("DomainInfo").
+		Preload("Profiles").
+		Preload("Contacts").
+		First(&entity, id)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &entity, nil
+}
+
 // GetEmailProfiles returns all EmailProfile records, optionally filtered by target.
 func (d *Database) GetEmailProfiles(targetID uint) ([]EmailProfile, error) {
 	var profiles []EmailProfile
