@@ -15,6 +15,7 @@ import (
 	"github.com/gianlucabassani/gosint/internal/crawler"
 	"github.com/gianlucabassani/gosint/internal/fuzzer"
 	"github.com/gianlucabassani/gosint/internal/osint"
+	"github.com/gianlucabassani/gosint/internal/osint/entities"
 	"github.com/gianlucabassani/gosint/internal/reports"
 	"github.com/gianlucabassani/gosint/internal/scanner"
 	"github.com/gianlucabassani/gosint/internal/storage"
@@ -361,22 +362,33 @@ func ExecuteExport(target, format, output string) error {
 
 	// Prepare report data
 	reportData := reports.ReportData{
-		Target:    targetObj.Domain,
-		ScanDate:  targetObj.LastScanned,
-		ScanMode:  "Unknown",
-		TargetObj: targetObj,
+		Target:       targetObj.Domain,
+		ScanDate:     targetObj.LastScanned,
+		ScanMode:     "Unknown",
+		TargetObj:    targetObj,
 		Technologies: targetObj.Technologies,
 		Subdomains:   targetObj.Subdomains,
 		Fuzzing:      targetObj.FuzzResults,
 	}
 
-	// Filter ScanResults into specific categories
+	// Filter ScanResults into specific categories. WHOIS is now stored
+	// structurally as DomainInfo (below); the legacy "whois" ScanResult is only
+	// present in older DBs and kept as a fallback.
 	for _, sr := range targetObj.ScanResults {
 		if sr.Type == "dns" {
 			reportData.DNS = append(reportData.DNS, sr)
 		} else if sr.Type == "whois" {
 			reportData.WHOIS = sr
 		}
+	}
+
+	// Attach OSINT entity data (WHOIS/DomainInfo, contacts, per-source profiles)
+	// if an Entity exists for this domain. Best-effort — absent for recon-only targets.
+	if ent, err := db.GetEntityByDomain(target); err == nil && ent != nil {
+		reportData.Entity = ent
+		reportData.DomainInfo = ent.DomainInfo
+		reportData.Contacts = ent.Contacts
+		reportData.OSINTProfiles = ent.Profiles
 	}
 
 	reportData.Duration = "N/A"
@@ -545,9 +557,12 @@ func init() {
 	osintSocialCmd.MarkFlagRequired("username")
 
 	osintDomainCmd.Flags().StringP("target", "t", "", "Domain to enrich (required)")
+
+	osintProfileCmd.Flags().StringP("target", "t", "", "Domain or email to profile")
+	osintProfileCmd.Flags().StringP("username", "u", "", "Username/social handle to profile")
 	osintDomainCmd.MarkFlagRequired("target")
 
-	osintCmd.AddCommand(osintEmailCmd, osintSocialCmd, osintDomainCmd)
+	osintCmd.AddCommand(osintEmailCmd, osintSocialCmd, osintDomainCmd, osintProfileCmd)
 
 	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd, osintCmd)
 }
@@ -682,6 +697,139 @@ var osintDomainCmd = &cobra.Command{
 	},
 }
 
+var osintProfileCmd = &cobra.Command{
+	Use:   "profile",
+	Short: "Full OSINT profile: fetch + persist an entity (domain/email/username) and its contacts",
+	Long: `Build a consolidated OSINT profile for a target by fetching from the
+available sources, persisting it as an entity with per-source profiles and
+harvested contacts, then printing the assembled profile.
+
+Type is auto-detected: an address with '@' is profiled as an email, otherwise as
+a domain. Use --username/-u to profile a social handle instead.
+
+Examples:
+  gosint osint profile -t example.com
+  gosint osint profile -t user@example.com
+  gosint osint profile -u johndoe`,
+	Run: func(cmd *cobra.Command, args []string) {
+		target, _ := cmd.Flags().GetString("target")
+		username, _ := cmd.Flags().GetString("username")
+
+		if target == "" && username == "" {
+			fmt.Println(" Error: provide --target/-t (domain or email) or --username/-u")
+			os.Exit(1)
+		}
+
+		ctx, cancel := CreateCancellableContext()
+		defer cancel()
+
+		keys := osint.LoadAPIKeys()
+		extractor := entities.New(storage.GetInstance())
+
+		var identifier, entityType, source string
+		var data map[string]any
+
+		switch {
+		case username != "":
+			identifier, entityType, source = username, "person", "social"
+			data = profileSocial(ctx, username)
+		case strings.Contains(target, "@"):
+			identifier, entityType, source = target, "person", "email"
+			data = profileEmail(ctx, keys, target)
+		default:
+			identifier, entityType, source = target, "domain", "domain"
+			data = profileDomain(ctx, keys, target)
+		}
+
+		fmt.Printf("\n  Building OSINT profile: %s (%s)\n", identifier, entityType)
+		fmt.Println(strings.Repeat("─", 50))
+
+		profile, err := extractor.Ingest(identifier, entityType, source, data)
+		if err != nil {
+			fmt.Printf("\n  Profile build failed: %v\n", err)
+			return
+		}
+		printOSINTProfile(profile)
+	},
+}
+
+// profileDomain gathers WHOIS + DNS + Shodan into a source map for a domain, and
+// persists structured DomainInfo on the entity along the way. All fetches are
+// best-effort — a failing source is simply omitted.
+func profileDomain(ctx context.Context, keys osint.APIKeys, domain string) map[string]any {
+	data := map[string]any{}
+
+	if w, err := scanner.LookupWHOIS(domain); err == nil && w != nil {
+		data["whois"] = map[string]any{
+			"registrar":    w.Registrar,
+			"created":      w.Created,
+			"expires":      w.Expires,
+			"name_servers": w.NameServers,
+		}
+		storage.GetInstance().SaveDomainInfoForDomain(domain, w.Registrar, w.Created, w.Expires, w.NameServers)
+	}
+
+	if d, err := scanner.LookupDNS(domain); err == nil && d != nil {
+		data["dns"] = map[string]any{"A": d.A, "AAAA": d.AAAA, "MX": d.MX, "NS": d.NS, "TXT": d.TXT}
+	}
+
+	if p, err := osint.NewDomainEnricher(keys).Enrich(ctx, domain); err == nil && p != nil {
+		if s := p.Shodan; s != nil {
+			data["shodan"] = map[string]any{
+				"ip_str": s.IP, "org": s.Organization, "isp": s.ISP, "ports": s.Ports,
+			}
+		}
+		if p.RobotsTxt != "" {
+			data["robots_txt"] = p.RobotsTxt
+		}
+	}
+	return data
+}
+
+// profileEmail runs an email OSINT scan into a source map.
+func profileEmail(ctx context.Context, keys osint.APIKeys, email string) map[string]any {
+	data := map[string]any{"email": email}
+	p, err := osint.NewEmailScanner(keys).Profile(ctx, email)
+	if err != nil || p == nil {
+		return data
+	}
+	hunter := map[string]any{"disposable": p.Disposable}
+	if p.Deliverability != nil {
+		hunter["status"] = p.Deliverability.Result
+		hunter["score"] = p.Deliverability.Score
+	}
+	data["hunterio"] = hunter
+
+	breaches := make([]any, 0, len(p.Breaches))
+	for _, b := range p.Breaches {
+		breaches = append(breaches, map[string]any{
+			"Name": b.Name, "Domain": b.Domain, "BreachDate": b.BreachDate,
+		})
+	}
+	data["breaches"] = breaches
+	return data
+}
+
+// profileSocial enumerates social profiles into a source map.
+func profileSocial(ctx context.Context, username string) map[string]any {
+	data := map[string]any{}
+	s := osint.NewSocialScanner()
+	if !s.IsAvailable() {
+		fmt.Println("  [!] sherlock not installed; skipping social enumeration")
+		return data
+	}
+	profiles, err := s.FindProfiles(ctx, username)
+	if err != nil {
+		return data
+	}
+	found := map[string]any{}
+	for _, p := range profiles {
+		found[p.Platform] = map[string]any{"exists": true, "url": p.URL}
+	}
+	data["profiles"] = found
+	return data
+}
+
 // printEmailProfile displays a formatted email profile to stdout.
 func printEmailProfile(p *osint.EmailProfile) {
 	fmt.Println()
@@ -734,6 +882,45 @@ func printDomainProfile(p *osint.DomainProfile) {
 		}
 	}
 	fmt.Println()
+}
+
+// printOSINTProfile displays an assembled entity profile to stdout.
+func printOSINTProfile(p *entities.Profile) {
+	fmt.Println()
+	fmt.Printf("  Entity         : %s (%s)\n", p.Entity.Name, p.Entity.Type)
+	if p.Entity.Domain != "" {
+		fmt.Printf("  Domain         : %s\n", p.Entity.Domain)
+	}
+
+	if p.DomainInfo != nil {
+		fmt.Println()
+		fmt.Println("  ── Domain Info ──────────────────────────")
+		fmt.Printf("  Registrar      : %s\n", p.DomainInfo.Registrar)
+		fmt.Printf("  Registered     : %s\n", p.DomainInfo.RegistrationDate)
+		fmt.Printf("  Expires        : %s\n", p.DomainInfo.ExpirationDate)
+		if len(p.DomainInfo.NameServers) > 0 {
+			fmt.Printf("  Name Servers   : %s\n", strings.Join(p.DomainInfo.NameServers, ", "))
+		}
+	}
+
+	if len(p.Sources) > 0 {
+		fmt.Println()
+		fmt.Println("  ── Sources ──────────────────────────────")
+		for src, sp := range p.Sources {
+			fmt.Printf("  [%s] updated %s\n", src, sp.UpdatedAt.Format("2006-01-02 15:04"))
+		}
+	}
+
+	if len(p.Contacts) > 0 {
+		fmt.Println()
+		fmt.Printf("  ── Contacts (%d) ─────────────────────────\n", len(p.Contacts))
+		for _, c := range p.Contacts {
+			fmt.Printf("  %-6s %s  (src: %s)\n", c.ContactType, c.Value, c.Source)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("  [+] Profile saved to database")
 }
 
 // saveEmailProfileToDB persists a scanned email profile to the database.

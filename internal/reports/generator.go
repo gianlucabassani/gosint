@@ -16,11 +16,17 @@ type ReportData struct {
 	// Data from DB
 	TargetObj    *storage.Target
 	DNS          []storage.ScanResult
-	WHOIS        storage.ScanResult
+	WHOIS        storage.ScanResult // legacy WHOIS JSON blob (old DBs); prefer DomainInfo
 	Technologies []storage.Technology
 	Subdomains   []storage.Subdomain
 	Fuzzing      []storage.FuzzResult
 	Wayback      storage.ScanResult
+
+	// OSINT entity data (browsint consolidation — populated when an Entity exists)
+	Entity        *storage.Entity
+	DomainInfo    *storage.DomainInfo
+	Contacts      []storage.Contact
+	OSINTProfiles []storage.OSINTProfile
 }
 
 // Generator defines the interface for different report formats

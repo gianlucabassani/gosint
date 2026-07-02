@@ -65,10 +65,33 @@ const htmlTemplate = `<!DOCTYPE html>
             <p><span class="label">Duration:</span> {{.Duration}}</p>
         </div>
 
-        {{if .WHOIS.Data}}
+        {{if .DomainInfo}}
+        <div class="section">
+            <h2>WHOIS / Domain Info</h2>
+            <p><span class="label">Registrar:</span> {{.DomainInfo.Registrar}}</p>
+            <p><span class="label">Registered:</span> {{.DomainInfo.RegistrationDate}}</p>
+            <p><span class="label">Expires:</span> {{.DomainInfo.ExpirationDate}}</p>
+        </div>
+        {{else if .WHOIS.Data}}
         <div class="section">
             <h2>WHOIS Information</h2>
             <pre>{{.WHOIS.Data}}</pre>
+        </div>
+        {{end}}
+
+        {{if .Contacts}}
+        <div class="section">
+            <h2>Contacts ({{len .Contacts}})</h2>
+            <table>
+                <tr><th>Type</th><th>Value</th><th>Source</th></tr>
+                {{range .Contacts}}
+                <tr>
+                    <td>{{if .Email}}email{{else}}phone{{end}}</td>
+                    <td>{{if .Email}}{{.Email}}{{else}}{{.Phone}}{{end}}</td>
+                    <td>{{.Source}}</td>
+                </tr>
+                {{end}}
+            </table>
         </div>
         {{end}}
 

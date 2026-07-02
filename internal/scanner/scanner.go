@@ -355,14 +355,9 @@ func (s *Scanner) runWHOISPhase(ctx context.Context, report *ScanReport) error {
 	}
 
 	if s.config.SaveToDB {
-		whoisData := map[string]interface{}{
-			"registrar": whoisResult.Registrar,
-			"created":   whoisResult.Created,
-			"expires":   whoisResult.Expires,
-		}
-		// Keep the ScanResult JSON blob (the report reader still consumes it) and
-		// additionally persist a structured DomainInfo on the domain Entity.
-		s.db.SaveScanResult(report.TargetID, string(s.config.Mode), "whois", whoisData, 1)
+		// WHOIS is now persisted structurally as DomainInfo on the domain Entity;
+		// the report reader reads DomainInfo (the legacy "whois" ScanResult blob is
+		// no longer written — see .agent/proposals/CONSOLIDATION.md, M3).
 		s.db.SaveDomainInfoForDomain(s.config.Target, whoisResult.Registrar, whoisResult.Created, whoisResult.Expires, whoisResult.NameServers)
 	}
 
