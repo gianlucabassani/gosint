@@ -321,15 +321,24 @@ func (d *Database) UpsertDomainInfo(entityID uint, registrar, regDate, expDate s
 	return &info, d.db.Save(&info).Error
 }
 
-// SaveDomainInfoForDomain is a convenience used by the scanner: it ensures a
-// domain-type Entity exists for the domain and upserts its DomainInfo in one call.
-func (d *Database) SaveDomainInfoForDomain(domain, registrar, regDate, expDate string, nameServers []string) error {
+// SaveDomainInfoForDomain ensures a domain-type Entity exists for the domain and
+// upserts its DomainInfo in one call, returning the entity so callers can link it
+// to a Target (see LinkTargetToEntity).
+func (d *Database) SaveDomainInfoForDomain(domain, registrar, regDate, expDate string, nameServers []string) (*Entity, error) {
 	entity, err := d.CreateOrUpdateEntity(domain, "domain", domain)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = d.UpsertDomainInfo(entity.ID, registrar, regDate, expDate, nameServers)
-	return err
+	if _, err := d.UpsertDomainInfo(entity.ID, registrar, regDate, expDate, nameServers); err != nil {
+		return nil, err
+	}
+	return entity, nil
+}
+
+// LinkTargetToEntity sets a target's EntityID, wiring the recon hub (Target) to
+// the OSINT hub (Entity). Idempotent.
+func (d *Database) LinkTargetToEntity(targetID, entityID uint) error {
+	return d.db.Model(&Target{}).Where("id = ?", targetID).Update("entity_id", entityID).Error
 }
 
 // SaveOSINTProfile upserts a per-source profile for an entity (UNIQUE(entity, source)).

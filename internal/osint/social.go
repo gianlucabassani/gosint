@@ -11,7 +11,8 @@ import (
 )
 
 // sherlockPattern matches Sherlock's positive output lines:
-//   [+] Reddit: https://www.reddit.com/user/johndoe
+//
+//	[+] Reddit: https://www.reddit.com/user/johndoe
 var sherlockPattern = regexp.MustCompile(`^\[\+\]\s+(.+?):\s+(https?://\S+)`)
 
 // SocialScanner uses Sherlock to enumerate social media profiles for a username.

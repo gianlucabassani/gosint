@@ -12,9 +12,9 @@ import (
 // APIKeys holds optional API credentials loaded from the environment.
 // All fields are optional — modules degrade gracefully when keys are absent.
 type APIKeys struct {
-	HIBP    string // HIBP_API_KEY  — HaveIBeenPwned v3
+	HIBP     string // HIBP_API_KEY  — HaveIBeenPwned v3
 	HunterIO string // HUNTER_API_KEY — Hunter.io email verifier
-	Shodan  string // SHODAN_API_KEY — Shodan host lookup
+	Shodan   string // SHODAN_API_KEY — Shodan host lookup
 }
 
 // ---------------------------------------------------------------------------
@@ -46,12 +46,12 @@ type DeliverabilityResult struct {
 
 // EmailProfile is the top-level result of an email OSINT run.
 type EmailProfile struct {
-	Email           string               `json:"email"`
-	Disposable      bool                 `json:"disposable"`       // fast local check
-	Breaches        []Breach             `json:"breaches"`         // from HIBP
-	BreachCount     int                  `json:"breach_count"`
-	Deliverability  *DeliverabilityResult `json:"deliverability"`  // from Hunter.io
-	ScannedAt       time.Time            `json:"scanned_at"`
+	Email          string                `json:"email"`
+	Disposable     bool                  `json:"disposable"` // fast local check
+	Breaches       []Breach              `json:"breaches"`   // from HIBP
+	BreachCount    int                   `json:"breach_count"`
+	Deliverability *DeliverabilityResult `json:"deliverability"` // from Hunter.io
+	ScannedAt      time.Time             `json:"scanned_at"`
 }
 
 // ---------------------------------------------------------------------------
@@ -80,25 +80,25 @@ type SocialResult struct {
 
 // ShodanInfo holds relevant fields from a Shodan host lookup.
 type ShodanInfo struct {
-	IP          string   `json:"ip_str"`
-	Organization string  `json:"org"`
-	ISP         string   `json:"isp"`
-	Country     string   `json:"country_name"`
-	City        string   `json:"city"`
-	Ports       []int    `json:"ports"`
-	Tags        []string `json:"tags"`
-	Vulns       []string `json:"vulns"`
-	LastUpdate  string   `json:"last_update"`
+	IP           string   `json:"ip_str"`
+	Organization string   `json:"org"`
+	ISP          string   `json:"isp"`
+	Country      string   `json:"country_name"`
+	City         string   `json:"city"`
+	Ports        []int    `json:"ports"`
+	Tags         []string `json:"tags"`
+	Vulns        []string `json:"vulns"`
+	LastUpdate   string   `json:"last_update"`
 }
 
 // DomainProfile is the top-level result of a domain enrichment run.
 type DomainProfile struct {
-	Domain          string      `json:"domain"`
-	WaybackCount    int         `json:"wayback_count"`    // URLs in Internet Archive
-	WaybackURLs     []string    `json:"wayback_urls"`     // up to 500 sample URLs
-	RobotsTxt       string      `json:"robots_txt"`       // raw robots.txt content
-	Shodan          *ShodanInfo `json:"shodan,omitempty"` // nil if no key or no result
-	ScannedAt       time.Time   `json:"scanned_at"`
+	Domain       string      `json:"domain"`
+	WaybackCount int         `json:"wayback_count"`    // URLs in Internet Archive
+	WaybackURLs  []string    `json:"wayback_urls"`     // up to 500 sample URLs
+	RobotsTxt    string      `json:"robots_txt"`       // raw robots.txt content
+	Shodan       *ShodanInfo `json:"shodan,omitempty"` // nil if no key or no result
+	ScannedAt    time.Time   `json:"scanned_at"`
 }
 
 // ---------------------------------------------------------------------------

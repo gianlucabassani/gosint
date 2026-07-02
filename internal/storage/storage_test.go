@@ -180,6 +180,32 @@ func TestDatabaseSizeAndBackup(t *testing.T) {
 	}
 }
 
+func TestSaveDomainInfoForDomainReturnsEntityAndLinks(t *testing.T) {
+	db := setupTestDB(t)
+
+	target, err := db.CreateOrUpdateTarget("link.test", "domain")
+	if err != nil {
+		t.Fatalf("CreateOrUpdateTarget: %v", err)
+	}
+
+	entity, err := db.SaveDomainInfoForDomain("link.test", "Reg", "2020", "2030", []string{"ns1.link.test"})
+	if err != nil || entity == nil {
+		t.Fatalf("SaveDomainInfoForDomain: entity=%v err=%v", entity, err)
+	}
+
+	if err := db.LinkTargetToEntity(target.ID, entity.ID); err != nil {
+		t.Fatalf("LinkTargetToEntity: %v", err)
+	}
+
+	got, err := db.GetTarget("link.test")
+	if err != nil {
+		t.Fatalf("GetTarget: %v", err)
+	}
+	if got.EntityID == nil || *got.EntityID != entity.ID {
+		t.Fatalf("expected target linked to entity %d, got %v", entity.ID, got.EntityID)
+	}
+}
+
 func TestGetDatabaseStatsIncludesNewTables(t *testing.T) {
 	db := setupTestDB(t)
 	stats := db.GetDatabaseStats()

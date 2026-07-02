@@ -564,7 +564,7 @@ func init() {
 
 	osintCmd.AddCommand(osintEmailCmd, osintSocialCmd, osintDomainCmd, osintProfileCmd)
 
-	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd, osintCmd)
+	rootCmd.AddCommand(scanCmd, crawlCmd, exportCmd, fuzzCmd, osintCmd, importBrowsintCmd)
 }
 
 func Execute() error {
@@ -758,6 +758,11 @@ Examples:
 // best-effort — a failing source is simply omitted.
 func profileDomain(ctx context.Context, keys osint.APIKeys, domain string) map[string]any {
 	data := map[string]any{}
+	db := storage.GetInstance()
+
+	// Create a recon Target for the domain so the profile is exportable, and link
+	// it to the OSINT Entity as WHOIS data lands below.
+	target, _ := db.CreateOrUpdateTarget(domain, "domain")
 
 	if w, err := scanner.LookupWHOIS(domain); err == nil && w != nil {
 		data["whois"] = map[string]any{
@@ -766,7 +771,9 @@ func profileDomain(ctx context.Context, keys osint.APIKeys, domain string) map[s
 			"expires":      w.Expires,
 			"name_servers": w.NameServers,
 		}
-		storage.GetInstance().SaveDomainInfoForDomain(domain, w.Registrar, w.Created, w.Expires, w.NameServers)
+		if entity, err := db.SaveDomainInfoForDomain(domain, w.Registrar, w.Created, w.Expires, w.NameServers); err == nil && entity != nil && target != nil {
+			db.LinkTargetToEntity(target.ID, entity.ID)
+		}
 	}
 
 	if d, err := scanner.LookupDNS(domain); err == nil && d != nil {
@@ -828,6 +835,39 @@ func profileSocial(ctx context.Context, username string) map[string]any {
 	}
 	data["profiles"] = found
 	return data
+}
+
+var importBrowsintCmd = &cobra.Command{
+	Use:   "import-browsint <browsint.db>",
+	Short: "Import entities, contacts, and profiles from a legacy browsint SQLite database",
+	Long: `Migrate OSINT data from the retired Python 'browsint' toolkit into gosint.
+
+Reads browsint's entities / domain_info / osint_profiles / contacts tables and
+imports them through gosint's normal upsert paths (idempotent — safe to re-run).
+The source database is never modified.
+
+Example:
+  gosint import-browsint ~/.browsint/osint.db`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Printf("\n  Importing from browsint database: %s\n", args[0])
+		fmt.Println(strings.Repeat("─", 50))
+
+		stats, err := storage.GetInstance().ImportBrowsint(args[0])
+		if err != nil {
+			fmt.Printf("\n  Import failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("\n  [+] Entities     : %d\n", stats.Entities)
+		fmt.Printf("  [+] Domain info  : %d\n", stats.DomainInfos)
+		fmt.Printf("  [+] Profiles     : %d\n", stats.Profiles)
+		fmt.Printf("  [+] Contacts     : %d\n", stats.Contacts)
+		if stats.Skipped > 0 {
+			fmt.Printf("  [!] Skipped      : %d (rows referencing an unmapped entity)\n", stats.Skipped)
+		}
+		fmt.Println("\n  Import complete.")
+	},
 }
 
 // printEmailProfile displays a formatted email profile to stdout.

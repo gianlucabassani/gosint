@@ -8,8 +8,8 @@ import "os"
 // Settings → Manage API Keys menu.
 func LoadAPIKeys() APIKeys {
 	return APIKeys{
-		HIBP:    os.Getenv("HIBP_API_KEY"),
+		HIBP:     os.Getenv("HIBP_API_KEY"),
 		HunterIO: os.Getenv("HUNTER_API_KEY"),
-		Shodan:  os.Getenv("SHODAN_API_KEY"),
+		Shodan:   os.Getenv("SHODAN_API_KEY"),
 	}
 }

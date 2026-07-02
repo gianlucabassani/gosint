@@ -357,8 +357,11 @@ func (s *Scanner) runWHOISPhase(ctx context.Context, report *ScanReport) error {
 	if s.config.SaveToDB {
 		// WHOIS is now persisted structurally as DomainInfo on the domain Entity;
 		// the report reader reads DomainInfo (the legacy "whois" ScanResult blob is
-		// no longer written — see .agent/proposals/CONSOLIDATION.md, M3).
-		s.db.SaveDomainInfoForDomain(s.config.Target, whoisResult.Registrar, whoisResult.Created, whoisResult.Expires, whoisResult.NameServers)
+		// no longer written — see .agent/proposals/CONSOLIDATION.md, M3). Link the
+		// recon Target to the OSINT Entity so the two hubs are connected.
+		if entity, err := s.db.SaveDomainInfoForDomain(s.config.Target, whoisResult.Registrar, whoisResult.Created, whoisResult.Expires, whoisResult.NameServers); err == nil && entity != nil {
+			s.db.LinkTargetToEntity(report.TargetID, entity.ID)
+		}
 	}
 
 	return nil

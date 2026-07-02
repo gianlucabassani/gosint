@@ -1,350 +1,169 @@
-# GOSINT - Go Security Intelligence Toolkit
+<h1 align="center">GOSINT</h1>
 
-A command-line OSINT and reconnaissance toolkit written in Go, inspired by Browsint.
+<p align="center">
+  <b>Go Security Intelligence Toolkit — fast, single-binary OSINT & reconnaissance.</b><br>
+  Domain recon, web crawling, fuzzing, and entity-centric OSINT profiling — from one
+  concurrent, dependency-free CLI that persists everything to a local SQLite database.
+</p>
 
-## Features
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.25%2B-3D9BFF">
+  <img src="https://img.shields.io/badge/status-active_development-F5A524">
+  <img src="https://img.shields.io/badge/stack-Go_·_Cobra_·_GORM_·_SQLite-3D9BFF">
+  <img src="https://img.shields.io/badge/build-single_static_binary-34D399">
+  <img src="https://img.shields.io/badge/license-MIT-8A93A8">
+</p>
 
-**Domain Reconnaissance**
-- 5 scan modes: Basic, Deep, Stealth, Aggressive, Custom
-- DNS enumeration (A, AAAA, MX, NS, TXT records)
-- WHOIS lookups
-- Technology stack detection
-- Passive intelligence (crt.sh, Wayback Machine)
-- Active subdomain enumeration
+---
 
-**Web Crawling**
-- Email harvesting
-- Phone number detection
-- Link discovery
-- Configurable depth and concurrency
+GOSINT gathers intelligence about domains, sites, and identities and stores it in a
+structured local database you can query, enrich, and export. Active recon
+(DNS/WHOIS/subdomains/tech/fuzzing) runs concurrently; API-backed OSINT (Hunter.io,
+HaveIBeenPwned, Shodan, social) degrades gracefully when keys are absent; and an
+**entity model** ties findings about the same target — its domain facts, per-source
+profiles, and harvested contacts — into one profile you can report on.
 
-**Fuzzing**
-- Directory fuzzing
-- Subdomain fuzzing
-- Virtual host discovery
-- Embedded wordlists
+> **Authorized use only.** GOSINT is for security research, authorized assessments,
+> and educational use. You are responsible for having permission to probe any target.
 
-**Storage**
-- SQLite database for persistent results
-- Database management and statistics
+> **Successor to [Browsint](../browsint).** GOSINT absorbs Browsint's OSINT
+> entity/contact model and extraction pipeline into Go (single static binary,
+> concurrency, tests). Migrate an existing Browsint database with
+> `gosint import-browsint <path.db>`.
 
-**Interface**
-- Clean Unicode box-drawing output
-- Interactive menu system
-- CLI mode for automation
+## Capabilities
 
-## Installation
+| Area | What it does |
+|------|--------------|
+| **Domain recon** | DNS (A/AAAA/MX/NS/TXT), WHOIS, technology fingerprinting, passive intel (crt.sh, Wayback), concurrent subdomain enumeration — across 5 scan modes |
+| **Web crawling** | Recursive, domain-scoped crawl harvesting emails, phone numbers, and links |
+| **Fuzzing** | Directory, virtual-host, and subdomain fuzzing with embedded wordlists |
+| **OSINT profiling** | Email breach/deliverability (HIBP, Hunter.io), social enumeration (Sherlock), domain enrichment (Shodan/Wayback) — assembled into an **entity** with per-source profiles + contacts |
+| **Storage & reports** | Persistent SQLite (`~/.gosint/gosint.db`); export to JSON, HTML, CSV, PDF |
 
-### Prerequisites
-- Go 1.18 or higher
+## Quick start
 
-### Build
+No cgo, no system libraries — the SQLite driver is pure Go, so it builds to one static binary.
+
 ```bash
-git clone https://github.com/yourusername/gosint.git
+git clone https://github.com/gianlucabassani/gosint.git
 cd gosint
-go mod download
-go build -o gosint ./cmd
+make build           # or: go build -o gosint ./cmd
+./gosint             # launch the interactive menu
 ```
 
-### Dependencies
-- `github.com/pterm/pterm` - Terminal UI
-- `github.com/spf13/cobra` - CLI framework
-- `gorm.io/gorm` - Database ORM
-- `gorm.io/driver/sqlite` - SQLite driver
+Optional API keys (all optional — modules degrade without them):
 
-## Quick Start
-
-### Interactive Mode
 ```bash
-./gosint
+export HIBP_API_KEY=...     # HaveIBeenPwned (breaches)
+export HUNTER_API_KEY=...   # Hunter.io (email deliverability)
+export SHODAN_API_KEY=...   # Shodan (host enrichment)
 ```
 
-Navigate through menus to:
-1. Domain Reconnaissance - Scan domains with different intensity levels
-2. Web Crawler - Extract OSINT data from websites
-3. Fuzzing - Discover hidden infrastructure
-4. OSINT Investigation - Coming soon
-5. Settings - Database management
+Common flows:
 
-### CLI Mode
-
-**Domain Scanning:**
 ```bash
-# Basic passive scan
-./gosint scan -t example.com --basic
-
-# Deep passive scan (includes crt.sh, Wayback)
+# Recon a domain, then export a report
 ./gosint scan -t example.com --deep
+./gosint export -t example.com -f html -o report.html
 
-# Stealth active scan (limited subdomain enumeration)
-./gosint scan -t example.com --stealth
+# Full OSINT profile (auto-detects domain / email / username)
+./gosint osint profile -t example.com
+./gosint osint profile -t alice@example.com
+./gosint osint profile -u johndoe
 
-# Aggressive scan (full enumeration + fuzzing)
-./gosint scan -t example.com --aggressive
-
-# Custom scan (choose features)
-./gosint scan -t example.com --custom \
-  --enable-dns --enable-whois --enable-tech \
-  --enable-passive --enable-subdomains \
-  --subdomain-limit 100 --verbose
-```
-
-**Web Crawling:**
-```bash
-./gosint crawl -u https://example.com -D 2
-```
-
-**Fuzzing:**
-```bash
-# Directory fuzzing
-./gosint fuzz -u https://example.com -m directory
-
-# Subdomain fuzzing
-./gosint fuzz -t example.com -m subdomain
-
-# Virtual host fuzzing
-./gosint fuzz -t 192.168.1.1 -m vhost
-```
-
-## Scan Modes
-
-### BASIC - Passive Infrastructure Analysis
-**Techniques:**
-- DNS enumeration (A, AAAA, MX, NS, TXT records)
-- WHOIS domain registration data
-- Technology stack detection
-
-**Target Interaction:** None - only DNS and WHOIS queries  
-**Detection Risk:** Minimal  
-**Use Case:** Initial reconnaissance, compliance scanning  
-**CLI:** `./gosint scan -t example.com --basic`
-
-### DEEP - External Passive Intelligence
-**Techniques:**
-- All BASIC techniques
-- Certificate Transparency (crt.sh) subdomain enumeration
-- Wayback Machine historical crawling
-
-**Target Interaction:** None - queries public archives only  
-**Detection Risk:** None (completely passive)  
-**Use Case:** Passive intelligence gathering, historical analysis  
-**CLI:** `./gosint scan -t example.com --deep`
-
-### STEALTH - Limited Active Enumeration
-**Techniques:**
-- All BASIC techniques
-- Reduced subdomain wordlist (50 entries)
-- Rate-limited HTTP probing
-
-**Target Interaction:** Active but minimal  
-**Detection Risk:** Low  
-**Use Case:** Authorized testing with OPSEC requirements  
-**CLI:** `./gosint scan -t example.com --stealth`
-
-### AGGRESSIVE - Comprehensive Active Scanning
-**Techniques:**
-- All BASIC techniques
-- Full subdomain enumeration
-- Directory fuzzing (50 concurrent threads)
-- Virtual host discovery
-
-**Target Interaction:** Extensive active probing  
-**Detection Risk:** Very High  
-**Use Case:** Full authorized security assessments  
-**CLI:** `./gosint scan -t example.com --aggressive`
-
-### CUSTOM - User-Defined Configuration
-**Techniques:** User-selected features  
-**CLI:** `./gosint scan -t example.com --custom [options]`
-
-**Available Options:**
-- `--enable-dns` - DNS enumeration
-- `--enable-whois` - WHOIS lookup
-- `--enable-tech` - Technology detection
-- `--enable-passive` - crt.sh + Wayback Machine
-- `--enable-subdomains` - Active subdomain enumeration
-- `--enable-fuzzing` - Directory/vhost fuzzing
-- `--subdomain-limit N` - Limit subdomain wordlist (0=unlimited)
-- `--subdomain-threads N` - Concurrent subdomain checks
-- `--fuzz-threads N` - Concurrent fuzzing threads
-- `--fuzz-directories` - Enable directory fuzzing
-- `--fuzz-vhosts` - Enable vhost fuzzing
-- `--http-timeout N` - HTTP timeout in seconds
-- `--verbose` - Detailed output
-
-## Output Example
-
-```
-╔════════════════════════════════════════════════════════╗
-║          DOMAIN RECONNAISSANCE SCAN                    ║
-╚════════════════════════════════════════════════════════╝
-
-┌─ Target:      example.com
-├─ Mode:        deep
-└─ Description: The Historian - Public records only
-
-  ▶ Enabled modules: DNS, WHOIS, Tech, Passive
-
-⏳ Resolving DNS records...
-
-┏━━━━━━━━━━━━━━━━━━━ DNS RECORDS ━━━━━━━━━━━━━━━━━━━┓
-  ┌─ Record A:
-  │  └─ 93.184.216.34
-  ┌─ Record MX:
-  │  └─ mail.example.com
-  ┌─ Record NS:
-  │  └─ ns1.example.com
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-⏳ Querying WHOIS database...
-
-┏━━━━━━━━━━━━━━━━━ WHOIS DATA ━━━━━━━━━━━━━━━━━┓
-  ┌─ Registrar:  Amazon Registrar, Inc.
-  ├─ Created:    2019-08-05
-  └─ Expires:    2026-08-05
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-⏳ Starting passive reconnaissance...
-
-┏━━━━━━━━━━━━━━━ PASSIVE INTELLIGENCE ━━━━━━━━━━━━━━┓
-  ▶ Subdomains (crt.sh): 23 found
-  ▶ Archived URLs (Wayback): 147 found
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-
-╔════════════════════════════════════════════════════════╗
-║                  SCAN COMPLETE                         ║
-╚════════════════════════════════════════════════════════╝
-
-┏━━━━━━━━━━━━━━ SCAN RESULTS SUMMARY ━━━━━━━━━━━━━━┓
-  ▶ DNS Records:         4
-  ▶ WHOIS Data:          Available
-  ▶ Technologies:        3 detected
-  ▶ Passive Subdomains:  23
-  ▶ Archived URLs:       147
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-```
-
-## Web Crawler
-
-Extract OSINT data from websites recursively.
-
-**Features:**
-- Email harvesting (pattern: `name@domain.com`)
-- Phone number detection (patterns: `+1-234-567-8900`, `(123) 456-7890`)
-- Link discovery
-- Configurable depth (default: 2)
-- 10 concurrent crawlers
-- Scoped to target domain
-
-**Usage:**
-```bash
+# Crawl for contacts, or fuzz for hidden infrastructure
 ./gosint crawl -u https://example.com -D 3
+./gosint fuzz  -u https://example.com -m directory -T 50
+
+# Migrate data from the retired Browsint toolkit
+./gosint import-browsint ~/.browsint/osint.db
 ```
 
-**Data Storage:**
-All extracted emails and phone numbers are saved to the database with source URLs.
+## Scan modes
 
-## Fuzzing
+| Mode | Techniques | Target interaction | Detection risk |
+|------|-----------|--------------------|----------------|
+| `--basic` | DNS · WHOIS · tech detection | none (DNS/WHOIS only) | minimal |
+| `--deep` | basic + crt.sh + Wayback | none (public archives) | none (passive) |
+| `--stealth` | basic + reduced, rate-limited subdomain probing | active, minimal | low |
+| `--aggressive` | basic + full subdomain enum + directory/vhost fuzzing | extensive | very high |
+| `--custom` | user-selected (`--enable-dns/-whois/-tech/-passive/-subdomains/-fuzzing`, thread/limit/timeout tuning) | varies | varies |
 
-Discover hidden infrastructure using embedded wordlists.
+## Architecture
 
-**Directory Fuzzing:**
-- Discovers hidden web paths and files
-- HTTP status codes: 200, 204, 301, 302, 307, 401, 403 considered valid
-- Default threads: 40
+```
+   gosint            ┌──────────────────────── cmd/main.go ────────────────────────┐
+   (CLI + TUI)  ───▶ │                     cobra command tree                       │
+                     └───────┬──────────┬──────────┬───────────────┬───────────────┘
+                             ▼          ▼          ▼               ▼
+                          scanner    crawler     fuzzer          osint
+                       DNS·WHOIS·   emails·     dir·vhost·   HIBP·Hunter·Shodan·
+                       tech·crt.sh  phones·links subdomain   social  ─┐
+                             │          │          │                  │ raw data
+                             │          │          │                  ▼
+                             │          │          │           osint/entities
+                             │          │          │        entity upsert · per-source
+                             │          │          │        profile · contact harvest
+                             └──────────┴──────────┴──────────┬───────┘
+                                                              ▼
+                                storage — GORM + SQLite (pure Go, no cgo)
+                                  Target (recon hub) ◀── FK ──▶ Entity (OSINT hub)
+                                                              ▼
+                                    reports — JSON · HTML · CSV · PDF
+```
+
+- **scanner / crawler / fuzzer** — concurrent recon; context-cancellable (Ctrl-C safe).
+- **osint / osint/entities** — API-backed lookups, then entity persistence: emails/phones
+  are harvested via a recursive walk and deduped; each source becomes an `OSINTProfile`.
+- **storage** — one SQLite file; `Target` (what you scanned) links to `Entity`
+  (who/what you profile). WHOIS is stored structurally as `DomainInfo`.
+- **reports** — the `export` command renders any target (with its entity data) to four formats.
+
+## Command reference
+
+| Command | Purpose |
+|---------|---------|
+| `scan -t <domain> [--basic\|--deep\|--stealth\|--aggressive\|--custom]` | Domain reconnaissance |
+| `crawl -u <url> [-D depth]` | Recursive OSINT web crawl |
+| `fuzz (-u <url>\|-t <host>) -m <directory\|vhost\|subdomain>` | Fuzzing |
+| `osint email -t <email>` · `osint social -u <user>` · `osint domain -t <domain>` | Single-source OSINT |
+| `osint profile (-t <domain\|email>\|-u <user>)` | Full profile: fetch → persist entity → print |
+| `export -t <target> -f <json\|html\|csv\|pdf> [-o file]` | Generate a report |
+| `import-browsint <browsint.db>` | Migrate a legacy Browsint database |
+
+Run without arguments for an interactive menu.
+
+## Configuration & storage
+
+- **Database:** `~/.gosint/gosint.db` (created on first run). Environment: `~/.gosint/.env`.
+- **Management:** view stats, clear tables, or reset via the interactive menu (Settings).
+- **API keys:** read from the environment (see Quick start).
+
+## Project layout
+
+```
+cmd/main.go                     entry point (DB init, env, CLI dispatch)
+internal/
+  cli/         commands.go · menu.go        cobra commands + interactive TUI
+  scanner/     dns · whois · subdomain · tech · passive · scanner
+  crawler/     crawler · extractor          crawl + email/phone extraction
+  fuzzer/      fuzzer · wordlists           fuzzing engine + embedded lists
+  osint/       email · social · domain · client · config
+    entities/  extractor · contacts · structured · profile   OSINT entity pipeline
+  storage/     database · models · queries · import_browsint  GORM + SQLite
+  reports/     generator · html · pdf · json_csv             report generators
+```
+
+## Development
 
 ```bash
-./gosint fuzz -u https://example.com -m directory -T 50
+make check     # gofmt + go vet + build + go test ./...  (the gate before "done")
+make test      # tests only
 ```
 
-**Subdomain Fuzzing:**
-- DNS-based subdomain discovery
-- Tests common subdomain names
-- Default threads: 40
-
-```bash
-./gosint fuzz -t example.com -m subdomain
-```
-
-**Virtual Host Fuzzing:**
-- Discovers vhosts on shared hosting
-- Tests Host header variations
-- Default threads: 40
-
-```bash
-./gosint fuzz -t 192.168.1.1 -m vhost
-```
-
-**Embedded Wordlists:**
-- `directories.txt` - 5,000 web paths
-- `subdomains.txt` - 10,000 subdomain names
-- `vhosts.txt` - 1,000 virtual host names
-
-## Database
-
-Results are automatically stored in `~/.gosint/gosint.db`
-
-**Management:**
-- View database statistics
-- Clear specific tables
-- Reset entire database
-- Historical tracking of all results
-
-**Access:**
-```bash
-./gosint  # Interactive menu > Settings > Database Management
-```
-
-## Project Structure
-
-```
-gosint/
-├── cmd/
-│   └── main.go              # Entry point
-├── internal/
-│   ├── cli/
-│   │   ├── commands.go      # CLI commands
-│   │   └── menu.go          # Interactive menu
-│   ├── scanner/
-│   │   ├── scanner.go       # Scan orchestrator
-│   │   ├── dns.go           # DNS queries
-│   │   ├── whois.go         # WHOIS lookups
-│   │   ├── subdomain.go     # Subdomain enumeration
-│   │   ├── tech.go          # Technology detection
-│   │   └── passive.go       # Passive reconnaissance
-│   ├── crawler/
-│   │   ├── crawler.go       # Web crawler
-│   │   └── extractor.go     # OSINT extraction
-│   ├── fuzzer/
-│   │   ├── fuzzer.go        # Fuzzing engine
-│   │   ├── wordlists.go     # Wordlist manager
-│   │   └── wordlists/       # Embedded wordlists
-│   └── storage/
-│       ├── database.go      # DB initialization
-│       ├── models.go        # Data models
-│       └── queries.go       # DB operations
-├── go.mod
-└── README.md
-```
-
-## Performance
-
-- **DNS Queries:** 10 concurrent workers, 5s timeout
-- **Subdomain Enumeration:** 5-50 workers (mode-dependent)
-- **Web Crawling:** 10 concurrent crawlers
-- **Directory Fuzzing:** Up to 50 concurrent threads
-- **Passive Recon:** Parallel execution (45% faster)
-
-
-## Technical Details
-
-**Architecture:**
-- Concurrent design using Go goroutines
-- Context-based cancellation for all operations
-- Clean signal handling (menu vs operation contexts)
-- GORM ORM with SQLite for persistence
-
+Tested packages: `storage`, `osint`, `osint/entities`, `crawler`.
 
 ## License
 
-MIT License
+MIT.

@@ -13,8 +13,8 @@ func TestEmailScanner_IsDisposable(t *testing.T) {
 	s := NewEmailScanner(APIKeys{})
 
 	tests := []struct {
-		email    string
-		want     bool
+		email string
+		want  bool
 	}{
 		{"user@mailinator.com", true},
 		{"user@guerrillamail.com", true},

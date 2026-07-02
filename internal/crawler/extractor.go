@@ -114,6 +114,18 @@ func ExtractEmails(text string) []string {
 			continue
 		}
 
+		// 3. Drop hash-like local parts (MD5 / UUID) — tracking-pixel & cache-buster noise
+		isHash := false
+		for _, p := range excludedPatterns {
+			if p.MatchString(lower) {
+				isHash = true
+				break
+			}
+		}
+		if isHash {
+			continue
+		}
+
 		if !uniqueEmails[lower] {
 			uniqueEmails[lower] = true
 			validEmails = append(validEmails, lower)
