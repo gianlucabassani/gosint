@@ -40,3 +40,7 @@ data/*
 tmp/
 temp/
 
+
+# Agent workspace (Claude working notes)
+AGENT.md
+.agent/

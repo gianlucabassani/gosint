@@ -4,19 +4,76 @@ import (
 	"time"
 )
 
-// Target represents a scanned domain/IP
+// Target represents a scanned domain/IP — the *recon* hub (something we scanned).
+// It optionally links to an Entity (the *OSINT* hub — someone/something we profile);
+// the two are kept distinct rather than merged (see .agent/proposals/CONSOLIDATION.md).
 type Target struct {
-	ID             uint   `gorm:"primaryKey"`
-	Domain         string `gorm:"uniqueIndex;not null"`
-	Type           string `gorm:"default:'domain'"` // domain, ip, url
+	ID             uint    `gorm:"primaryKey"`
+	Domain         string  `gorm:"uniqueIndex;not null"`
+	Type           string  `gorm:"default:'domain'"` // domain, ip, url
+	EntityID       *uint   // optional link to the OSINT Entity this target belongs to
+	Entity         *Entity `gorm:"foreignKey:EntityID"`
 	CreatedAt      time.Time
 	LastScanned    time.Time
-	ScanResults    []ScanResult   `gorm:"foreignKey:TargetID"`
-	FuzzResults    []FuzzResult   `gorm:"foreignKey:TargetID"`
-	Subdomains     []Subdomain    `gorm:"foreignKey:TargetID"`
-	Technologies   []Technology   `gorm:"foreignKey:TargetID"`
-	EmailProfiles  []EmailProfile `gorm:"foreignKey:TargetID"`
+	ScanResults    []ScanResult    `gorm:"foreignKey:TargetID"`
+	FuzzResults    []FuzzResult    `gorm:"foreignKey:TargetID"`
+	Subdomains     []Subdomain     `gorm:"foreignKey:TargetID"`
+	Technologies   []Technology    `gorm:"foreignKey:TargetID"`
+	EmailProfiles  []EmailProfile  `gorm:"foreignKey:TargetID"`
 	SocialProfiles []SocialProfile `gorm:"foreignKey:TargetID"`
+}
+
+// Entity is the OSINT hub — a person, company, or domain under investigation.
+// Mirrors browsint's `entities` table (see CONSOLIDATION.md). Distinct from Target:
+// Target is "something we scanned", Entity is "someone/something we profile".
+type Entity struct {
+	ID         uint           `gorm:"primaryKey"`
+	Type       string         `gorm:"not null"` // person, company, domain
+	Name       string         `gorm:"not null"`
+	Domain     *string        `gorm:"uniqueIndex"` // optional; pointer so multiple entities can have NULL (SQLite allows dup NULLs, not dup '')
+	DomainInfo *DomainInfo    `gorm:"foreignKey:EntityID"`
+	Profiles   []OSINTProfile `gorm:"foreignKey:EntityID"`
+	Contacts   []Contact      `gorm:"foreignKey:EntityID"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// DomainInfo holds WHOIS-derived registration facts for a domain Entity.
+// Mirrors browsint's `domain_info`; one row per entity (UNIQUE(entity_id)).
+// Replaces stuffing WHOIS into a ScanResult JSON blob with structured storage.
+type DomainInfo struct {
+	ID               uint `gorm:"primaryKey"`
+	EntityID         uint `gorm:"uniqueIndex;not null"`
+	Registrar        string
+	RegistrationDate string // kept as string — WHOIS date formats vary wildly
+	ExpirationDate   string
+	NameServers      string `gorm:"type:json"` // JSON-encoded []string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// OSINTProfile stores one source's data about an Entity.
+// Mirrors browsint's `osint_profiles`; UNIQUE(entity_id, source).
+type OSINTProfile struct {
+	ID              uint   `gorm:"primaryKey"`
+	EntityID        uint   `gorm:"not null;uniqueIndex:idx_entity_source"`
+	Source          string `gorm:"not null;uniqueIndex:idx_entity_source"` // e.g. hunter, hibp, shodan, crawl
+	RawData         string `gorm:"type:json"`
+	ExtractedFields string `gorm:"type:json"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// Contact is an email/phone harvested for an Entity.
+// Mirrors browsint's `contacts`; UNIQUE(entity_id, email, phone).
+type Contact struct {
+	ID        uint   `gorm:"primaryKey"`
+	EntityID  uint   `gorm:"not null;uniqueIndex:idx_entity_contact"`
+	Email     string `gorm:"uniqueIndex:idx_entity_contact"`
+	Phone     string `gorm:"uniqueIndex:idx_entity_contact"`
+	Source    string `gorm:"not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // ScanResult stores reconnaissance data
@@ -64,9 +121,9 @@ type Technology struct {
 
 // EmailProfile stores the result of an email OSINT scan.
 type EmailProfile struct {
-	ID          uint         `gorm:"primaryKey"`
-	TargetID    uint         `gorm:"index;not null"`
-	Email       string       `gorm:"not null"`
+	ID          uint   `gorm:"primaryKey"`
+	TargetID    uint   `gorm:"index;not null"`
+	Email       string `gorm:"not null"`
 	Disposable  bool
 	Deliverable string        // "deliverable", "undeliverable", "risky", "unknown", or ""
 	Score       int           // Hunter.io confidence score 0–100
@@ -77,8 +134,8 @@ type EmailProfile struct {
 
 // BreachEntry stores a single data breach associated with an EmailProfile.
 type BreachEntry struct {
-	ID             uint   `gorm:"primaryKey"`
-	EmailProfileID uint   `gorm:"index;not null"`
+	ID             uint `gorm:"primaryKey"`
+	EmailProfileID uint `gorm:"index;not null"`
 	Name           string
 	Domain         string
 	BreachDate     string

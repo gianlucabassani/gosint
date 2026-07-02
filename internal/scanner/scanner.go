@@ -360,7 +360,10 @@ func (s *Scanner) runWHOISPhase(ctx context.Context, report *ScanReport) error {
 			"created":   whoisResult.Created,
 			"expires":   whoisResult.Expires,
 		}
+		// Keep the ScanResult JSON blob (the report reader still consumes it) and
+		// additionally persist a structured DomainInfo on the domain Entity.
 		s.db.SaveScanResult(report.TargetID, string(s.config.Mode), "whois", whoisData, 1)
+		s.db.SaveDomainInfoForDomain(s.config.Target, whoisResult.Registrar, whoisResult.Created, whoisResult.Expires, whoisResult.NameServers)
 	}
 
 	return nil
